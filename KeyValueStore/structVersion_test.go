@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestRejectDoubleClose_struct(t *testing.T){
+func TestRejectDoubleClose(t *testing.T){
 	store := kvs.OpenNew()
 	fmt.Println(store.InstanceNum) // just to show public-ness
 	//fmt.Println(store.coreMap) // "unexported field"
@@ -25,7 +25,7 @@ func TestRejectDoubleClose_struct(t *testing.T){
 	}
 }
 
-func TestRejectDeleteNonStoredKey_struct(t *testing.T){
+func TestRejectDeleteNonStoredKey(t *testing.T){
 	store := kvs.OpenNew()
 
 	if err := kvs.DeleteValue(store, "MissingKey"); err == nil{
@@ -91,7 +91,7 @@ func TestMemberUse(t *testing.T){
 	}
 }
 
-func TestOpenSaveReadAndClose_struct(t *testing.T) {
+func TestOpenSaveReadAndClose(t *testing.T) {
 	store := kvs.OpenNew()
 
 	if v,err := kvs.GetValue(store, "AnyKey"); err == nil{
@@ -119,7 +119,7 @@ func TestOpenSaveReadAndClose_struct(t *testing.T) {
 	}
 }
 
-func TestDoublePutIsOk_strut(t *testing.T){
+func TestDoublePutIsOk(t *testing.T){
 	store := kvs.OpenNew()
 
 	if err := kvs.PutValue(store, "CorrectKey", "CorrectValue"); err != nil {
@@ -141,7 +141,7 @@ func TestDoublePutIsOk_strut(t *testing.T){
 	}
 }
 
-func TestTwoStoresDontInteract_strut(t *testing.T){
+func TestTwoStoresDontInteract(t *testing.T){
 	store1 := kvs.OpenNew()
 	store2 := kvs.OpenNew()
 
@@ -221,6 +221,46 @@ func TestEvictionAndTiming(t *testing.T){
 	if found := store.Contains("lose-key"); found {t.Errorf("Expected 'lose-key' to be missing, but it was found")}
 	if found := store.Contains("refreshed-key"); !found {t.Errorf("Expected 'refreshed-key' to be found, but it was missing")}
 	if found := store.Contains("keep-key"); !found {t.Errorf("Expected 'keep-key' to be found, but it was missing")}
+}
+
+func TestCanStoreAnything(t *testing.T){
+	store := kvs.OpenNew()
+
+	// Put some various values
+	if err:= store.Put("string-key", "value"); err != nil {t.Errorf("Put failed with %v", err)}
+	if err:= store.Put("int-key", 1234); err != nil {t.Errorf("Put failed with %v", err)}
+	if err:= store.Put("float-key", float32(12.34)); err != nil {t.Errorf("Put failed with %v", err)}
+
+	// Check we can get them back correctly
+	if val,err:= store.Get("string-key"); err !=nil{
+		t.Errorf("Get failed with %v", err)
+	} else {
+		if str,ok := val.(string); !ok{
+			t.Errorf("Expected a string, but was %T", val)
+		} else {
+			fmt.Printf("Correctly loaded '%s'\r\n", str)
+		}
+	}
+
+	if val,err:= store.Get("int-key"); err !=nil{
+		t.Errorf("Get failed with %v", err)
+	} else {
+		if str,ok := val.(int); !ok{
+			t.Errorf("Expected an int, but was %T", val)
+		} else {
+			fmt.Printf("Correctly loaded %v\r\n", str)
+		}
+	}
+
+	if val,err:= store.Get("float-key"); err !=nil{
+		t.Errorf("Get failed with %v", err)
+	} else {
+		if str,ok := val.(float32); !ok{
+			t.Errorf("Expected a float, but was %T", val)
+		} else {
+			fmt.Printf("Correctly loaded %v\r\n", str)
+		}
+	}
 }
 
 func s(i int)string{return strconv.Itoa(i)}

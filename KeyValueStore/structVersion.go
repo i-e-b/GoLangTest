@@ -1,6 +1,7 @@
 package keyvaluestore
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -22,25 +23,33 @@ type StoreValue interface {
 type OpenClose interface {
 	Open() error
 	Close() error
-	IsOpen() bool
 }
 
 func Describe(thing interface{}) string {
 	// demonstrate type switching and casting from interface to known type
 	// you can also do
 	//     value,ok := thing.(MyType)
-	// which will give ok==false if the cast is bad
+	// which will give ok==false if the cast is bad.
+	// If you do
+	//     value := thing.(MyType)
+	// and the cast is bad, you get a panic.
 	switch v := thing.(type) {
 	case StoreValue:
 		sv := thing.(StoreValue)
 		return fmt.Sprintf("Store value '%v', last accessed %v", sv.GetValue(), sv.GetTimestamp())
 	case StoreKey:
-		sk := thing.(StoreKey)
-		return fmt.Sprintf("Store Key ['%v']", sk)
+		return fmt.Sprintf("Store Key ['%v']", thing.(StoreKey))
+	case string:
+		return fmt.Sprintf("\"%s\"", thing.(string))
 	default:
 		return fmt.Sprintf("I don't know about type %T!\n", v)
 	}
 }
+
+var StoreAlreadyOpenError = errors.New("the store is already open")
+var StoreNotOpenError = errors.New("the store is not open")
+var InvalidStoreError = errors.New("the store is invalid")
+var KeyNotPresentError = errors.New("the given key is not present in this store")
 
 // independentStore - this struct isn't exported
 // it can still be used if returned by a function, but can't be directly new()'d
@@ -55,13 +64,13 @@ type independentStore struct {
 	InstanceNum int
 }
 
-type stringWrapper struct{
+type timestampWrapper struct{
 	lastAccess time.Time
-	value string
+	value interface{}
 }
-func (receiver *stringWrapper) SetTimestamp(t time.Time) {receiver.lastAccess=t }
-func (receiver *stringWrapper) GetTimestamp()time.Time {return receiver.lastAccess}
-func (receiver *stringWrapper) GetValue()interface{} {return receiver.value}
+func (receiver *timestampWrapper) SetTimestamp(t time.Time) {receiver.lastAccess=t }
+func (receiver *timestampWrapper) GetTimestamp()time.Time   {return receiver.lastAccess}
+func (receiver *timestampWrapper) GetValue()interface{}     {return receiver.value}
 
 // String satisfies the Stringer interface. It doesn't matter if we use `(receiver *independentStore)` or `(receiver independentStore)`
 func (receiver *independentStore) String() string {
@@ -99,27 +108,27 @@ func CloseExisting(store *independentStore) error {
 	return nil
 }
 
-func PutValue(store *independentStore, key StoreKey, value string) error {
+func PutValue(store *independentStore, key StoreKey, value interface{}) error {
 	if store == nil || !store.isOpen {return StoreNotOpenError}
 	if store.coreMap == nil {return InvalidStoreError}
-	store.coreMap[key] = &stringWrapper{
+	store.coreMap[key] = &timestampWrapper{
 		lastAccess: time.Now(),
 		value:      value,
 	}
 	return nil
 }
 
-func (receiver *independentStore)Put(key StoreKey, value string) error {
+func (receiver *independentStore)Put(key StoreKey, value interface{}) error {
 	if receiver == nil || !receiver.isOpen {return StoreNotOpenError}
 	if receiver.coreMap == nil {return InvalidStoreError}
-	receiver.coreMap[key] = &stringWrapper{
+	receiver.coreMap[key] = &timestampWrapper{
 		lastAccess: time.Now(),
 		value:      value,
 	}
 	return nil
 }
 
-func GetValue(store *independentStore, key StoreKey) (string, error){
+func GetValue(store *independentStore, key StoreKey) (interface{}, error){
 	if store == nil || !store.isOpen {return "", StoreNotOpenError}
 	if store.coreMap == nil {return "", InvalidStoreError}
 	value, ok := store.coreMap[key]
@@ -127,14 +136,14 @@ func GetValue(store *independentStore, key StoreKey) (string, error){
 	return fmt.Sprintf("%v",value.GetValue()), nil // seems a bit mental, but is about the only way to cast interface to string
 }
 
-func (receiver *independentStore)Get(key StoreKey) (string, error){
+func (receiver *independentStore)Get(key StoreKey) (interface{}, error){
 	if receiver == nil || !receiver.isOpen {return "", StoreNotOpenError}
 	if receiver.coreMap == nil {return "", InvalidStoreError}
 	value, ok := receiver.coreMap[key]
 	if !ok {return "", KeyNotPresentError}
 	value.SetTimestamp(time.Now())
-	//fmt.Printf("The raw key is %T, %v", value,value) // shows this is a pointer -> "The raw key is *keyvaluestore.stringWrapper, &{{13853528404013489860 2887601 0x62a2e0} CorrectValue}"
-	return fmt.Sprintf("%v",value.GetValue()), nil
+	//fmt.Printf("The raw key is %T, %v", value,value) // shows this is a pointer -> "The raw key is *keyvaluestore.timestampWrapper, &{{13853528404013489860 2887601 0x62a2e0} CorrectValue}"
+	return value.GetValue(), nil
 }
 
 func (receiver *independentStore)GetAge(key StoreKey) (time.Time, error){
@@ -169,10 +178,10 @@ func (receiver *independentStore)Contains(key StoreKey) bool{
 	return ok
 }
 
-func (receiver *independentStore) PutWithAge(key StoreKey, value string, timestamp time.Time) error {
+func (receiver *independentStore) PutWithAge(key StoreKey, value interface{}, timestamp time.Time) error {
 	if receiver == nil || !receiver.isOpen {return StoreNotOpenError}
 	if receiver.coreMap == nil {return InvalidStoreError}
-	receiver.coreMap[key] = &stringWrapper{
+	receiver.coreMap[key] = &timestampWrapper{
 		lastAccess: timestamp,
 		value:      value,
 	}
