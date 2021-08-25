@@ -9,15 +9,44 @@ var iNum=0
 
 type StoreKey string
 
+type Valuable interface {
+	GetValue() interface{}
+}
+
 type StoreValue interface {
+	Valuable // embedding interface in another
 	SetTimestamp(t time.Time)
 	GetTimestamp() time.Time
-	GetValue() interface{}
+}
+
+type OpenClose interface {
+	Open() error
+	Close() error
+	IsOpen() bool
+}
+
+func Describe(thing interface{}) string {
+	// demonstrate type switching and casting from interface to known type
+	// you can also do
+	//     value,ok := thing.(MyType)
+	// which will give ok==false if the cast is bad
+	switch v := thing.(type) {
+	case StoreValue:
+		sv := thing.(StoreValue)
+		return fmt.Sprintf("Store value '%v', last accessed %v", sv.GetValue(), sv.GetTimestamp())
+	case StoreKey:
+		sk := thing.(StoreKey)
+		return fmt.Sprintf("Store Key ['%v']", sk)
+	default:
+		return fmt.Sprintf("I don't know about type %T!\n", v)
+	}
 }
 
 // independentStore - this struct isn't exported
 // it can still be used if returned by a function, but can't be directly new()'d
 type independentStore struct {
+	OpenClose // Injects a field that is a reference (default nil) to an implementation. Compiler is wonky here, beware.
+
 	// private
 	isOpen bool
 	coreMap map[StoreKey]StoreValue // interface always acts like a pointer?
@@ -34,7 +63,8 @@ func (receiver *stringWrapper) SetTimestamp(t time.Time) {receiver.lastAccess=t 
 func (receiver *stringWrapper) GetTimestamp()time.Time {return receiver.lastAccess}
 func (receiver *stringWrapper) GetValue()interface{} {return receiver.value}
 
-func (receiver independentStore) String() string {
+// String satisfies the Stringer interface. It doesn't matter if we use `(receiver *independentStore)` or `(receiver independentStore)`
+func (receiver *independentStore) String() string {
 	return fmt.Sprintf("Key value store (%d keys, is open = %v)", len(receiver.coreMap), receiver.isOpen)
 }
 

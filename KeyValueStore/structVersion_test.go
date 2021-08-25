@@ -187,6 +187,8 @@ func TestManyKeys(t *testing.T){
 func TestEvictionAndTiming(t *testing.T){
 	store := kvs.OpenNew()
 
+	fmt.Println(kvs.Describe(kvs.StoreKey("keep-key")))
+
 	// Put in a range of old and new keys
 	if err:= store.Put(kvs.StoreKey("keep-key"), "value"); err != nil {
 		t.Errorf("Put failed with %v", err)
@@ -201,9 +203,10 @@ func TestEvictionAndTiming(t *testing.T){
 	}
 
 	// 'Get' one of the older keys (it should be 'new' again)
-	if _,err := store.Get("refreshed-key"); err != nil{
+	if v,err := store.Get("refreshed-key"); err != nil{
 		t.Errorf("Expected value, but got error '%v'", err)
 	} else {
+		fmt.Println(kvs.Describe(v))
 		v, _ := store.GetAge("refreshed-key")
 		fmt.Printf("Latest time for refreshed key = %v\r\n", v)
 		// Note: if you forget to put a new-line on the last printf in a test, GoLand won't understand the result

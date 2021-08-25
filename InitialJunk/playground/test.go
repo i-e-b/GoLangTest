@@ -43,10 +43,24 @@ type Employee struct {
 	PrivateId string `json:"-"` // always omit
 }
 
+func (p *Person)Test(){
+	fmt.Println("Hi there")
+}
+
 // https://golang.org/doc/code
 func PlaygroundTests() {
 	one := new(One)
 	fmt.Printf("%T\r\n", one.anna().anna())
+
+	var anonInterfaceTest interface{Test()} = &Person{}
+	anonInterfaceTest.Test()
+
+	var untypedTest interface{} = Person{}
+	//fmt.Println(untypedTest.Age) // error: unknown type
+
+	// cast interface to a known type
+	pUnAnon := untypedTest.(Person) // will panic if it can't be cast
+	fmt.Println(pUnAnon.Age)
 
 	// Composite types
 	bloke := Employee{
