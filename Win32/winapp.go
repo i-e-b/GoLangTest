@@ -32,6 +32,8 @@ var (
 	pPostQuitMessage  = user32.NewProc("PostQuitMessage")
 	pRegisterClassExW = user32.NewProc("RegisterClassExW")
 	pTranslateMessage = user32.NewProc("TranslateMessage")
+	pBeginPaint       = user32.NewProc("BeginPaint")
+	pEndPaint         = user32.NewProc("EndPaint")
 )
 
 const (
@@ -52,10 +54,13 @@ const (
 
 //func createWindow(className, windowName string, style uint32, x, y, width, height int32, parent, menu, instance syscall.Handle) (syscall.Handle, error) {
 func createWindow(className, windowName string, style uint32, x, y, width, height uint32, parent, menu, instance syscall.Handle) (syscall.Handle, error) {
+	classNamePtr, _ :=syscall.UTF16PtrFromString(className)
+	windowNamePtr, _ :=syscall.UTF16PtrFromString(windowName)
+
 	ret, _, err := pCreateWindowExW.Call(
 		uintptr(0),
-		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(className))),
-		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(windowName))),
+		uintptr(unsafe.Pointer(classNamePtr)),
+		uintptr(unsafe.Pointer(windowNamePtr)),
 		uintptr(style),
 		uintptr(x),
 		uintptr(y),
@@ -73,8 +78,10 @@ func createWindow(className, windowName string, style uint32, x, y, width, heigh
 }
 
 const (
+	// Handy reference: https://www.pinvoke.net/default.aspx/Constants.WM
 	cWM_DESTROY = 0x0002
 	cWM_CLOSE   = 0x0010
+	cWM_PAINT	= 0x000F
 )
 
 func defWindowProc(hwnd syscall.Handle, msg uint32, wparam, lparam uintptr) uintptr {
@@ -163,6 +170,19 @@ type tWNDCLASSEXW struct {
 	iconSm     syscall.Handle
 }
 
+type tRECT struct{
+	x,y,h,w int32
+}
+
+type tPAINTSTRUCT struct {
+	hdc        uintptr
+	fErase     bool
+	rcPaint    tRECT
+	fRestore   bool
+	fIncUpdate bool
+	reserved   [32]byte
+}
+
 func registerClassEx(wcx *tWNDCLASSEXW) (uint16, error) {
 	ret, _, err := pRegisterClassExW.Call(
 		uintptr(unsafe.Pointer(wcx)),
@@ -175,6 +195,10 @@ func registerClassEx(wcx *tWNDCLASSEXW) (uint16, error) {
 
 func translateMessage(msg *tMSG) {
 	pTranslateMessage.Call(uintptr(unsafe.Pointer(msg)))
+}
+
+func beginPaint(hwnd syscall.Handle, paintStruct *tPAINTSTRUCT){
+	pBeginPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(paintStruct)))
 }
 
 func main() {
@@ -192,12 +216,18 @@ func main() {
 		return
 	}
 
+	// --------------------------------------------
+	// MAIN WIN32 EVENT LOOP
+	// --------------------------------------------
 	fn := func(hwnd syscall.Handle, msg uint32, wparam, lparam uintptr) uintptr {
 		switch msg {
 		case cWM_CLOSE:
 			destroyWindow(hwnd)
 		case cWM_DESTROY:
 			postQuitMessage(0)
+		case cWM_PAINT:
+			paint:=tPAINTSTRUCT{}
+			beginPaint(hwnd, &paint)
 		default:
 			ret := defWindowProc(hwnd, msg, wparam, lparam)
 			return ret
