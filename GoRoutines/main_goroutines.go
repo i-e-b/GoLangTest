@@ -76,34 +76,32 @@ func main() {
 	a := make(chan int) // unbuffered
 	b := make(chan int) // unbuffered
 	wait.Add(2)
-	go PingPonger(a, b, wait, 5)
-	go PingPonger(b, a, wait, 15)
-	fmt.Printf("S")
+	go PingPonger("Venus", a, b, wait, 5)
+	go PingPonger("Serena", b, a, wait, 15)
 	a <- 0// serve. Note, with unbuffered channels, you *MUST* have a listener waiting before you send
-	fmt.Printf("*")
 	wait.Wait()
 
 	fmt.Println("Done")
 }
 
-func PingPonger(inbox chan int, outbox chan int, wait *sync.WaitGroup, times int) {
-	fmt.Printf("!")
+func PingPonger(name string, inbox chan int, outbox chan int, wait *sync.WaitGroup, times int) {
 	defer wait.Done()
 
 	for i := 0; i < times; i++ {
-		fmt.Printf("w")
-		v,ok := WithTimeout(func()interface{}{return <- inbox}, time.Second)
-		j := v.(int)
+		v, ok := WithTimeout(func() interface{} { return <-inbox }, time.Second)
+
+		j := v.(int) + 1
 
 		if !ok {
-			fmt.Printf("... I win! (nw)")
+			fmt.Printf("... %s wins! (nw)\r\n", name)
 			return
 		}
 
-		fmt.Printf("r%d",j)
-		_,ok = WithTimeout(func()interface{}{outbox <- j+1; return nil}, time.Second)
-		if !ok{
-			fmt.Printf("... I win! (nr)")
+		fmt.Printf(" %s ret %d ", name, j)
+
+		_, ok = WithTimeout(func() interface{} { outbox <- j; return nil }, time.Second)
+		if !ok {
+			fmt.Printf("... %s wins! (nr)\r\n", name)
 			return
 		}
 	}
@@ -129,7 +127,7 @@ func WithTimeout(delegate func()interface{}, timeout time.Duration) (result inte
 		}
 	}()
 
-	ok = <- ch
+	ok = <- ch // wait for either return of delegate or timeout
 	return ret, ok
 }
 
