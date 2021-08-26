@@ -288,12 +288,15 @@ func acceptStuff(input <-chan workStruct, wait *sync.WaitGroup) {
 	}
 }
 
-var primes = []int{
-	2,3,5,7,11,13,17,19,23,29,31,37,41,43,47,53,59,
-	61,67,71,73,79,83,89,97,101,103,107,109,113,127,
-	131,137,139,149,151,157,163,167,173,179,181,191,
-	193,197,199,211,223,227,229,233,239,241,251,257,
-	263,269,271}
+
+func isPrime(v int) bool {
+	if v <= 1 {return false}
+
+	for i := 2; i < (v / 2); i++ {
+		if v%i == 0 {return false}
+	}
+	return true
+}
 // passPrimes only forwards messages if they're prime (or kill messages)
 func passPrimes (input <-chan workStruct, output chan<- workStruct, workerTempData *workerData) {
 	defer func() {
@@ -305,22 +308,21 @@ func passPrimes (input <-chan workStruct, output chan<- workStruct, workerTempDa
 	for work := range input {
 		if work.KillSignal {return}
 
-		// lazy prime check. Forward if it matches
-		for i := 0; i < len(primes); i++ {
-			if primes[i]== work.GeneratorNum {
-				work.WorkerId = workerTempData.Id
-				work.WorkerNum = x
-				x++
-				output <- work
-			}
-		}
+		// lazy prime check. Skip if not prime
+		if !isPrime(work.GeneratorNum) {continue}
+
+		// is prime, so forward to output channel
+		work.WorkerId = workerTempData.Id
+		work.WorkerNum = x
+		x++
+		output <- work
 
 		time.Sleep(time.Millisecond * 100)
 	}
 }
 
 func generateStuff(output chan<- workStruct) {
-	for i := 0; i < 272; i++ {
+	for i := 0; i < 1000; i++ {
 		output <- workStruct{
 			GeneratorNum: i,
 			WorkerId:     0,
