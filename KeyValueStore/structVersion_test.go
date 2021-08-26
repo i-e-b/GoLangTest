@@ -4,6 +4,7 @@ import (
 	kvs "KeyValueStore"
 	"fmt"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -221,6 +222,34 @@ func TestEvictionAndTiming(t *testing.T){
 	if found := store.Contains("lose-key"); found {t.Errorf("Expected 'lose-key' to be missing, but it was found")}
 	if found := store.Contains("refreshed-key"); !found {t.Errorf("Expected 'refreshed-key' to be found, but it was missing")}
 	if found := store.Contains("keep-key"); !found {t.Errorf("Expected 'keep-key' to be found, but it was missing")}
+}
+
+func TestParallelExecution(t *testing.T){
+	store := kvs.OpenNew()
+
+	wait := &sync.WaitGroup{}
+	wait.Add(3)
+
+	go _FuzzStore(store, wait)
+	go _FuzzStore(store, wait)
+	go _FuzzStore(store, wait)
+
+	wait.Wait()
+}
+
+func _FuzzStore(store *kvs.IndependentStore, wait *sync.WaitGroup) {
+	defer wait.Done()
+	for i := 0; i < 100; i++ {
+		switch i%3 {
+		case 0:
+			_, _ = store.Get("key")
+		case 1:
+			_ = store.Delete("key")
+		case 3:
+			_ = store.Put("key", "hello")
+		}
+		time.Sleep(1)
+	}
 }
 
 func TestCanStoreAnything(t *testing.T){

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"syscall"
 	"unsafe"
@@ -22,6 +23,8 @@ func getModuleHandle() (syscall.Handle, error) {
 
 var (
 	user32 = syscall.NewLazyDLL("user32.dll")
+	//coredll = syscall.NewLazyDLL("coredll.dll") // if someone points you to this, it probably means user32 on desktop.
+	gdi32 = syscall.NewLazyDLL("gdi32.dll")
 
 	pCreateWindowExW  = user32.NewProc("CreateWindowExW")
 	pDefWindowProcW   = user32.NewProc("DefWindowProcW")
@@ -32,8 +35,14 @@ var (
 	pPostQuitMessage  = user32.NewProc("PostQuitMessage")
 	pRegisterClassExW = user32.NewProc("RegisterClassExW")
 	pTranslateMessage = user32.NewProc("TranslateMessage")
+
 	pBeginPaint       = user32.NewProc("BeginPaint")
 	pEndPaint         = user32.NewProc("EndPaint")
+
+	pGetClientRect     = user32.NewProc("GetClientRect")
+	pGetDC = user32.NewProc("GetDC")
+	pCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
+	pCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
 )
 
 const (
@@ -171,11 +180,12 @@ type tWNDCLASSEXW struct {
 }
 
 type tRECT struct{
-	x,y,h,w int32
+	left,top,right,bottom int32
 }
 
 type tPAINTSTRUCT struct {
-	hdc        uintptr
+	// To decode the Win32 type macros, see -- https://docs.microsoft.com/en-us/windows/win32/learnwin32/windows-coding-conventions
+	hdc        uintptr // draw context: used to do actual output
 	fErase     bool
 	rcPaint    tRECT
 	fRestore   bool
@@ -198,7 +208,31 @@ func translateMessage(msg *tMSG) {
 }
 
 func beginPaint(hwnd syscall.Handle, paintStruct *tPAINTSTRUCT){
-	pBeginPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(paintStruct)))
+	// Win32 calls always return an error >:-(
+	_, _, _ = pBeginPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(paintStruct)))
+}
+
+func endPaint(hwnd syscall.Handle, paintStruct *tPAINTSTRUCT){
+	_, _, _ = pEndPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(paintStruct)))
+}
+
+func getClientRect(hwnd syscall.Handle, lpRect *tRECT){
+	_, _, _ = pGetClientRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(lpRect)))
+}
+
+func getDC(hwnd syscall.Handle) uintptr{
+	r1, _, _ := pGetDC.Call(uintptr(hwnd))
+	return r1
+}
+
+func createCompatibleDC(hdc uintptr) uintptr {
+	r1, _, _ := pCreateCompatibleDC.Call(hdc)
+	return r1
+}
+
+func createCompatibleBitmap(hdc uintptr, width int32, height int32) uintptr {
+	r1, _, _ := pCreateCompatibleBitmap.Call(hdc, uintptr(width), uintptr(height))
+	return r1
 }
 
 func main() {
@@ -228,6 +262,16 @@ func main() {
 		case cWM_PAINT:
 			paint:=tPAINTSTRUCT{}
 			beginPaint(hwnd, &paint)
+			defer endPaint(hwnd, &paint)
+
+			DrawBitsIntoWindow(hwnd)
+
+			//fmt.Printf("drawing %v (%v)\r\n", hwnd, paint.hdc)
+			// TODO: figure out drawing a raw bitmap here
+			// see also https://www.codeproject.com/articles/224754/guide-to-win32-memory-dc
+			// HBITMAP memBM = CreateCompatibleBitmap ( hDC, nWidth, nHeight );  https://docs.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-createcompatiblebitmap
+			// int SetDIBits(hDC, memBM, ...); https://docs.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-setdibits
+			// BOOL DeleteObject(memBM); https://docs.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-deleteobject
 		default:
 			ret := defWindowProc(hwnd, msg, wparam, lparam)
 			return ret
@@ -281,4 +325,22 @@ func main() {
 			break
 		}
 	}
+}
+
+func DrawBitsIntoWindow(hwnd syscall.Handle) {
+	// https://stackoverflow.com/questions/35762636/raw-direct-acess-on-pixels-data-in-a-bitmapinfo-hbitmap
+	rc:= tRECT{}
+	getClientRect(hwnd, &rc)
+
+	width := rc.right
+	height := rc.bottom
+	if width < 1 || height < 1 {
+		fmt.Println("error: invalid rectangle size")
+		return
+	}
+
+	hdc := getDC(hwnd)
+	hCaptureDC := createCompatibleDC(hdc)
+	hBitmap := createCompatibleBitmap(hdc, width, height)
+	fmt.Println(hBitmap, hCaptureDC)
 }
