@@ -219,7 +219,8 @@ func main() {
 	               |              |
 	gen -[ chFo ]--+--> worker2 --+-->[ chFi ]--> acceptor
 	               |              |
-	               +--> worker3 --+
+	              ...            ...
+	               +--> workerN --+
 	 */
 	var poolWorkerId = 0
 	pool := sync.Pool{
@@ -241,12 +242,76 @@ func main() {
 	wait.Add(1)
 	go acceptStuff(chFi, wait)
 	wait.Wait()
-	close(chFo)
-	close(chFi)
 	//</editor-fold>
 
 	fmt.Println("All Done")
 }
+
+func acceptStuff(input <-chan workStruct, wait *sync.WaitGroup) {
+	defer wait.Done()
+	for work := range input {
+		if work.KillSignal {
+			fmt.Printf("acceptor terminating\r\n")
+			return
+		}
+
+		fmt.Printf("Found prime [ %3d ]            #%-2d by worker %d\r\n", work.GeneratorNum, work.WorkerNum, work.WorkerId)
+	}
+}
+
+// isPrime checks for divisors greater than 2 the obvious way
+func isPrime(v int) bool {
+	if v <= 1 {return false}
+	if v == 2 {return true}
+	if (v & 1) == 0 && v != 2 {return false} // cheap bitwise test for even numbers
+	hv := v / 2
+
+	for i := 2; i < hv; i++ {
+		if v % i == 0 {return false}
+	}
+	return true
+}
+
+// passPrimes only forwards messages if they're prime (or kill messages)
+func passPrimes (input <-chan workStruct, output chan<- workStruct, workerTempData *workerData) {
+	defer func() {output <- workStruct{KillSignal: true}}() // cascade the kill signal
+
+	var x int
+	for work := range input {
+		if work.KillSignal {return}
+
+		// skip if not prime
+		if !isPrime(work.GeneratorNum) {continue}
+
+		// is prime, so forward to output channel
+		work.WorkerId = workerTempData.Id
+		work.WorkerNum = x
+		x++
+		output <- work
+
+		time.Sleep(time.Millisecond * 100)
+	}
+}
+
+func generateStuff(output chan<- workStruct) {
+	for i := 0; i < 1000; i++ {
+		output <- workStruct{
+			GeneratorNum: i,
+			WorkerId:     0,
+			WorkerNum:    0,
+			KillSignal:   false,
+		}
+	}
+
+	// just for demo
+	time.Sleep(time.Second)
+	output <- workStruct{KillSignal: true}
+}
+
+func calmDown() {
+	if r := recover(); r != nil {}
+}
+
 
 func chainGenerate() chan int {
 	pipeChain := make(chan int, 1) // with this pattern, we have to buffer
@@ -274,72 +339,6 @@ func action1(input chan int, output chan int) {
 func action2(input chan int, output chan int) {
 	v := <-input
 	output <- v*2
-}
-
-func acceptStuff(input <-chan workStruct, wait *sync.WaitGroup) {
-	defer wait.Done()
-	for work := range input {
-		if work.KillSignal {
-			fmt.Printf("acceptor terminating\r\n")
-			return
-		}
-
-		fmt.Printf("Found prime [ %3d ]            #%-2d by worker %d\r\n", work.GeneratorNum, work.WorkerNum, work.WorkerId)
-	}
-}
-
-
-func isPrime(v int) bool {
-	if v <= 1 {return false}
-
-	for i := 2; i < (v / 2); i++ {
-		if v%i == 0 {return false}
-	}
-	return true
-}
-// passPrimes only forwards messages if they're prime (or kill messages)
-func passPrimes (input <-chan workStruct, output chan<- workStruct, workerTempData *workerData) {
-	defer func() {
-		defer calmDown() // just to silence weird thing I'm doing for testing
-		output <- workStruct{KillSignal: true}
-	}() // cascade the kill signal
-
-	var x int
-	for work := range input {
-		if work.KillSignal {return}
-
-		// lazy prime check. Skip if not prime
-		if !isPrime(work.GeneratorNum) {continue}
-
-		// is prime, so forward to output channel
-		work.WorkerId = workerTempData.Id
-		work.WorkerNum = x
-		x++
-		output <- work
-
-		time.Sleep(time.Millisecond * 100)
-	}
-}
-
-func generateStuff(output chan<- workStruct) {
-	for i := 0; i < 1000; i++ {
-		output <- workStruct{
-			GeneratorNum: i,
-			WorkerId:     0,
-			WorkerNum:    0,
-			KillSignal:   false,
-		}
-	}
-
-	// just for demo
-	time.Sleep(time.Second)
-	for i := 0; i < 3; i++ {
-		output <- workStruct{KillSignal: true}
-	}
-}
-
-func calmDown() {
-	if r := recover(); r != nil {}
 }
 
 func readMulti(chan1 <-chan SauceMessage, chan2 <-chan string, chan3 <-chan int, kill <-chan bool) {
