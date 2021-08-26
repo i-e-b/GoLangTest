@@ -12,6 +12,17 @@ type SauceMessage struct {
 	Value int
 }
 
+type workStruct struct {
+	GeneratorNum int
+	WorkerId int
+	WorkerNum int
+	KillSignal bool
+}
+
+type workerData struct {
+	Id int
+}
+
 func main() {
 	fmt.Println("Let's do things independently...")
 
@@ -117,13 +128,13 @@ func main() {
 	fmt.Println("Open channel length", len(oneTarget), "capacity", cap(oneTarget), "ptr", &oneTarget)
 	close(oneTarget)
 
-	// Fan in+out
+	// Fan-in then fan-out
 	grandCentral := make(chan SauceMessage, 20)
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 4; i++ {
 		wait.Add(1)
 		go writeChan2("Prod"+s(i), grandCentral, wait)
 	}
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 4; i++ {
 		go readRangeChan2("Cons"+s(i), grandCentral)
 	}
 	wait.Wait() // wait for writers to finish
@@ -148,8 +159,86 @@ func main() {
 	//close(chan2) // if you close some (but not all) channels here, the `select` in `readMulti` will go nuts. Don't do it!
 	time.Sleep(time.Millisecond*100)
 	killChan<- true
+	fmt.Println("\r\n\r\n")
 
-	fmt.Println("Done")
+	// Fan-out then Fan-in
+	/*
+	          { ---- pool workers ---- }
+	               +--> worker1 --+
+	               |              |
+	gen -[ chFo ]--+--> worker2 --+-->[ chFi ]--> acceptor
+	               |              |
+	               +--> worker3 --+
+	 */
+	var poolWorkerId = 100
+	pool := sync.Pool{
+		New: func() interface{} {
+			// Pools often contain things like *bytes.Buffer, which are
+			// temporary and re-usable.
+			poolWorkerId++
+			return &workerData{Id: poolWorkerId}
+		},
+	}
+
+	chFo := make(chan workStruct, 10)
+	chFi := make(chan workStruct, 10)
+	go generateStuff(chFo)
+	go processStuff(chFo, chFi, pool.Get().(*workerData))
+	go processStuff(chFo, chFi, pool.Get().(*workerData))
+	go processStuff(chFo, chFi, pool.Get().(*workerData))
+
+	wait.Add(1)
+	go acceptStuff(chFi, wait)
+	wait.Wait()
+
+	fmt.Println("All Done")
+}
+
+func acceptStuff(input <-chan workStruct, wait *sync.WaitGroup) {
+	defer wait.Done()
+	for work := range input {
+		if work.KillSignal {
+			fmt.Printf("acceptor terminating\r\n")
+			return
+		}
+
+		fmt.Printf("Storing data-- generator-item:%d, worker-item:%d worker-id:%d\r\n", work.GeneratorNum, work.WorkerNum, work.WorkerId)
+	}
+}
+
+func processStuff(input <-chan workStruct, output chan<- workStruct, workerTempData *workerData) {
+	defer func() {output <- workStruct{KillSignal: true}}()
+
+	var i int
+	for work := range input {
+		if work.KillSignal {
+			fmt.Printf("worker %d terminating\r\n", workerTempData.Id)
+			return
+		}
+
+		time.Sleep(time.Millisecond * 100)
+		work.WorkerId = workerTempData.Id
+		work.WorkerNum = i
+		i++
+		output <- work
+	}
+}
+
+func generateStuff(output chan<- workStruct) {
+	for i := 0; i < 10; i++ {
+		output <- workStruct{
+			GeneratorNum: i,
+			WorkerId:     0,
+			WorkerNum:    0,
+			KillSignal:   false,
+		}
+	}
+
+	// just for demo
+	time.Sleep(time.Second)
+	for i := 0; i < 3; i++ {
+		output <- workStruct{KillSignal: true}
+	}
 }
 
 func readMulti(chan1 <-chan SauceMessage, chan2 <-chan string, chan3 <-chan int, kill <-chan bool) {
@@ -171,7 +260,7 @@ func readMulti(chan1 <-chan SauceMessage, chan2 <-chan string, chan3 <-chan int,
 
 func writeChan2(name string, source chan<- SauceMessage, wait *sync.WaitGroup) { // write only channel
 	defer wait.Done()
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 5; i++ {
 		source <- SauceMessage{
 			Sender: name,
 			Value:  i,
