@@ -24,6 +24,7 @@ type workerData struct {
 }
 
 func main() {
+/*
 	fmt.Println("Let's do things independently...")
 
 	var value string
@@ -41,12 +42,6 @@ func main() {
 	// Not waiting? Go-routines don't hold parent open.
 	go printer("A", strChannel, wait)
 	go printer("B", strChannel, wait)
-	/*
-	func returner(msg string)string{
-		return msg+"!"
-	}*/
-	//x := go returner("x") // can't return. Need to get a channel?
-	//go returner("x") // can call a returning function, but we lose the value
 
 	// try to pick up a single value from the channel
 	if v, ok := <-strChannel; !ok{
@@ -98,7 +93,11 @@ func main() {
 	a <- 0// serve. Note, with unbuffered channels, you *MUST* have a listener waiting before you send
 	wait.Wait()
 
+	//<editor-fold desc="Fan-out to distribute work">
+
+	// ---------------------------
 	// Fan-out to distribute work
+	// ---------------------------
 	oneSource := make(chan int, 10)
 	for i := 0; i < 10; i++ {oneSource <- i}
 	go readChan("One", oneSource)
@@ -109,9 +108,13 @@ func main() {
 	for len(oneSource) > 0 {time.Sleep(time.Millisecond*50)}
 	close(oneSource) // can't write to a closed channel, but can `_,ok` style read.
 	fmt.Println("...done")
+	//</editor-fold>
 
+	//<editor-fold desc="Fan-in different sources">
 
+	// ---------------------------
 	// Fan-in different sources
+	// ---------------------------
 	oneTarget := make(chan SauceMessage, 10)
 	go writeChan("One", oneTarget)
 	go writeChan("Two", oneTarget)
@@ -127,8 +130,14 @@ func main() {
 	fmt.Println("Closed channel length", len(oneSource), "capacity", cap(oneSource), "ptr", &oneSource)
 	fmt.Println("Open channel length", len(oneTarget), "capacity", cap(oneTarget), "ptr", &oneTarget)
 	close(oneTarget)
+	//</editor-fold>
 
+	//<editor-fold desc="Fan-in then fan-out">
+
+
+	// ---------------------------
 	// Fan-in then fan-out
+	// ---------------------------
 	grandCentral := make(chan SauceMessage, 20)
 	for i := 0; i < 4; i++ {
 		wait.Add(1)
@@ -145,8 +154,13 @@ func main() {
 	close(grandCentral)
 	time.Sleep(time.Millisecond*500) // give readers time to send 'closed' messages
 	fmt.Println("...all closed")
+	//</editor-fold>
 
+	//<editor-fold desc="Multi-channel select">
+
+	// ---------------------------
 	// Multi-channel select
+	// ---------------------------
 	chan1 := make(chan SauceMessage, 1)
 	chan2 := make(chan string, 1)
 	chan3 := make(chan int, 1)
@@ -159,9 +173,46 @@ func main() {
 	//close(chan2) // if you close some (but not all) channels here, the `select` in `readMulti` will go nuts. Don't do it!
 	time.Sleep(time.Millisecond*100)
 	killChan<- true
-	fmt.Println("\r\n\r\n")
+	fmt.Println()
+	//</editor-fold>
 
+	//<editor-fold desc="Pipelines, pattern 1 (fixed)">
+
+	//
+	//this func -> [pipeSeg1] --> action1 --> [pipeSeg2] --> action2 --> [pipeSeg3] --> this func
+	//
+	pipeSeg1 := make(chan int)
+	pipeSeg2 := make(chan int)
+	pipeSeg3 := make(chan int)
+	go action1(pipeSeg1, pipeSeg2) // add 1
+	go action2(pipeSeg2, pipeSeg3) // multiply by 2
+	pipeSeg1 <- 1
+	final := <- pipeSeg3
+	fmt.Println("Pipeline produced", final)
+	close(pipeSeg1)
+	close(pipeSeg2)
+	close(pipeSeg3)
+	fmt.Println()
+	//</editor-fold>
+
+	//<editor-fold desc="Pipelines, pattern 2 (chaining)">
+
+	// ---------------------------
+	// Pipelines, pattern 2 (chaining)
+	// ---------------------------
+	final = <- chainAction2(chainAction1(chainGenerate()))
+	fmt.Println("Pipeline/chain produced", final)
+	fmt.Println()
+	//</editor-fold>
+
+	*/
+
+	//<editor-fold desc="Fan-out then Fan-in">
+
+	wait := &sync.WaitGroup{}
+	// ---------------------------
 	// Fan-out then Fan-in
+	// ---------------------------
 	/*
 	          { ---- pool workers ---- }
 	               +--> worker1 --+
@@ -170,7 +221,7 @@ func main() {
 	               |              |
 	               +--> worker3 --+
 	 */
-	var poolWorkerId = 100
+	var poolWorkerId = 0
 	pool := sync.Pool{
 		New: func() interface{} {
 			// Pools often contain things like *bytes.Buffer, which are
@@ -183,15 +234,46 @@ func main() {
 	chFo := make(chan workStruct, 10)
 	chFi := make(chan workStruct, 10)
 	go generateStuff(chFo)
-	go processStuff(chFo, chFi, pool.Get().(*workerData))
-	go processStuff(chFo, chFi, pool.Get().(*workerData))
-	go processStuff(chFo, chFi, pool.Get().(*workerData))
+	for i := 0; i < 4; i++ {
+		go passPrimes(chFo, chFi, pool.Get().(*workerData))
+	}
 
 	wait.Add(1)
 	go acceptStuff(chFi, wait)
 	wait.Wait()
+	close(chFo)
+	close(chFi)
+	//</editor-fold>
 
 	fmt.Println("All Done")
+}
+
+func chainGenerate() chan int {
+	pipeChain := make(chan int, 1) // with this pattern, we have to buffer
+	pipeChain <- 1                 // otherwise, this would block
+	return pipeChain
+}
+
+func chainAction1(input chan int) chan int {
+	next := make(chan int)
+	go action1(input, next)
+	return next
+}
+
+func chainAction2(input chan int) chan int {
+	next := make(chan int)
+	go action2(input, next)
+	return next
+}
+
+func action1(input chan int, output chan int) {
+	v := <-input
+	output <- v+1
+}
+
+func action2(input chan int, output chan int) {
+	v := <-input
+	output <- v*2
 }
 
 func acceptStuff(input <-chan workStruct, wait *sync.WaitGroup) {
@@ -202,30 +284,43 @@ func acceptStuff(input <-chan workStruct, wait *sync.WaitGroup) {
 			return
 		}
 
-		fmt.Printf("Storing data-- generator-item:%d, worker-item:%d worker-id:%d\r\n", work.GeneratorNum, work.WorkerNum, work.WorkerId)
+		fmt.Printf("Found prime [ %3d ]            #%-2d by worker %d\r\n", work.GeneratorNum, work.WorkerNum, work.WorkerId)
 	}
 }
 
-func processStuff(input <-chan workStruct, output chan<- workStruct, workerTempData *workerData) {
-	defer func() {output <- workStruct{KillSignal: true}}()
+var primes = []int{
+	2,3,5,7,11,13,17,19,23,29,31,37,41,43,47,53,59,
+	61,67,71,73,79,83,89,97,101,103,107,109,113,127,
+	131,137,139,149,151,157,163,167,173,179,181,191,
+	193,197,199,211,223,227,229,233,239,241,251,257,
+	263,269,271}
+// passPrimes only forwards messages if they're prime (or kill messages)
+func passPrimes (input <-chan workStruct, output chan<- workStruct, workerTempData *workerData) {
+	defer func() {
+		defer calmDown() // just to silence weird thing I'm doing for testing
+		output <- workStruct{KillSignal: true}
+	}() // cascade the kill signal
 
-	var i int
+	var x int
 	for work := range input {
-		if work.KillSignal {
-			fmt.Printf("worker %d terminating\r\n", workerTempData.Id)
-			return
+		if work.KillSignal {return}
+
+		// lazy prime check. Forward if it matches
+		for i := 0; i < len(primes); i++ {
+			if primes[i]== work.GeneratorNum {
+				work.WorkerId = workerTempData.Id
+				work.WorkerNum = x
+				x++
+				output <- work
+			}
 		}
 
 		time.Sleep(time.Millisecond * 100)
-		work.WorkerId = workerTempData.Id
-		work.WorkerNum = i
-		i++
-		output <- work
 	}
 }
 
 func generateStuff(output chan<- workStruct) {
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 272; i++ {
 		output <- workStruct{
 			GeneratorNum: i,
 			WorkerId:     0,
@@ -239,6 +334,10 @@ func generateStuff(output chan<- workStruct) {
 	for i := 0; i < 3; i++ {
 		output <- workStruct{KillSignal: true}
 	}
+}
+
+func calmDown() {
+	if r := recover(); r != nil {}
 }
 
 func readMulti(chan1 <-chan SauceMessage, chan2 <-chan string, chan3 <-chan int, kill <-chan bool) {

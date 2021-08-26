@@ -43,6 +43,7 @@ var (
 	pGetDC = user32.NewProc("GetDC")
 	pCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
 	pCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
+	pDeleteObject = gdi32.NewProc("DeleteObject")
 )
 
 const (
@@ -193,6 +194,25 @@ type tPAINTSTRUCT struct {
 	reserved   [32]byte
 }
 
+type tBITMAPINFO struct {
+	bmiHeader tBITMAPINFOHEADER
+	bmiColors [1]int32;
+}
+
+type tBITMAPINFOHEADER struct {
+	biSize int32
+	biWidth int32
+	biHeight int32
+	biPlanes int16
+	biBitCount int16
+	biCompression uint32//BitmapCompressionMode - BI_RGB = 0,BI_RLE8 = 1,BI_RLE4 = 2,BI_BITFIELDS = 3,BI_JPEG = 4,BI_PNG = 5
+	biSizeImage int32
+	biXPelsperMeter int32
+	biYPelsPerMeter int32
+	biClrUsed int32
+	biClrImportant int32
+}
+
 func registerClassEx(wcx *tWNDCLASSEXW) (uint16, error) {
 	ret, _, err := pRegisterClassExW.Call(
 		uintptr(unsafe.Pointer(wcx)),
@@ -233,6 +253,10 @@ func createCompatibleDC(hdc uintptr) uintptr {
 func createCompatibleBitmap(hdc uintptr, width int32, height int32) uintptr {
 	r1, _, _ := pCreateCompatibleBitmap.Call(hdc, uintptr(width), uintptr(height))
 	return r1
+}
+
+func deleteObject(obj uintptr){
+	_, _, _ = pDeleteObject.Call(obj)
 }
 
 func main() {
@@ -340,7 +364,21 @@ func DrawBitsIntoWindow(hwnd syscall.Handle) {
 	}
 
 	hdc := getDC(hwnd)
-	hCaptureDC := createCompatibleDC(hdc)
+	//hCaptureDC := createCompatibleDC(hdc)
 	hBitmap := createCompatibleBitmap(hdc, width, height)
-	fmt.Println(hBitmap, hCaptureDC)
+	defer deleteObject(hBitmap)
+	//fmt.Println(hBitmap, hCaptureDC)
+
+	myBMInfo := tBITMAPINFO{}
+	myBMInfo.bmiHeader = tBITMAPINFOHEADER{
+		biWidth : width,
+		biHeight : height,
+		biPlanes : 1,
+		biBitCount : 32,
+	}
+	myBMInfo.bmiHeader.biSize = int32(unsafe.Sizeof(myBMInfo));
+
+	size := ((width * int32(myBMInfo.bmiHeader.biBitCount) + 31) / 32) * 4 * height
+	rawbytes := make([]byte, size)//[size]byte
+	fmt.Println(len(rawbytes))
 }
