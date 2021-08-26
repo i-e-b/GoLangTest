@@ -2,9 +2,15 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 )
+
+type SauceMessage struct {
+	Sender string
+	Value int
+}
 
 func main() {
 	fmt.Println("Let's do things independently...")
@@ -81,14 +87,146 @@ func main() {
 	a <- 0// serve. Note, with unbuffered channels, you *MUST* have a listener waiting before you send
 	wait.Wait()
 
+	// Fan-out to distribute work
+	oneSource := make(chan int, 10)
+	for i := 0; i < 10; i++ {oneSource <- i}
+	go readChan("One", oneSource)
+	go readChan("Two", oneSource)
+	go readRangeChan("Three", oneSource)
+
+	// wait for the channel to be empty
+	for len(oneSource) > 0 {time.Sleep(time.Millisecond*50)}
+	close(oneSource) // can't write to a closed channel, but can `_,ok` style read.
+	fmt.Println("...done")
+
+
+	// Fan-in different sources
+	oneTarget := make(chan SauceMessage, 10)
+	go writeChan("One", oneTarget)
+	go writeChan("Two", oneTarget)
+	go writeChan("Three", oneTarget)
+
+	time.Sleep(time.Millisecond*50)
+	for len(oneTarget) > 0 { // wait until empty
+		v:= <-oneTarget
+		fmt.Printf("%d from %s; ", v.Value, v.Sender)
+	}
+	fmt.Println("...done")
+
+	fmt.Println("Closed channel length", len(oneSource), "capacity", cap(oneSource), "ptr", &oneSource)
+	fmt.Println("Open channel length", len(oneTarget), "capacity", cap(oneTarget), "ptr", &oneTarget)
+	close(oneTarget)
+
+	// Fan in+out
+	grandCentral := make(chan SauceMessage, 20)
+	for i := 0; i < 10; i++ {
+		wait.Add(1)
+		go writeChan2("Prod"+s(i), grandCentral, wait)
+	}
+	for i := 0; i < 10; i++ {
+		go readRangeChan2("Cons"+s(i), grandCentral)
+	}
+	wait.Wait() // wait for writers to finish
+
+	for len(grandCentral) > 0 { // wait until empty
+		time.Sleep(time.Millisecond*10)
+	}
+	close(grandCentral)
+	time.Sleep(time.Millisecond*500) // give readers time to send 'closed' messages
+	fmt.Println("...all closed")
+
+	// Multi-channel select
+	chan1 := make(chan SauceMessage, 1)
+	chan2 := make(chan string, 1)
+	chan3 := make(chan int, 1)
+	killChan := make(chan bool)
+	go readMulti(chan1, chan2, chan3, killChan)
+	chan1 <- SauceMessage{Sender: "main", Value: 123}
+	chan2 <- "Hello"
+	chan3 <- 456
+
+	//close(chan2) // if you close some (but not all) channels here, the `select` in `readMulti` will go nuts. Don't do it!
+	time.Sleep(time.Millisecond*100)
+	killChan<- true
+
 	fmt.Println("Done")
 }
 
-func PingPonger(name string, inbox chan int, outbox chan int, wait *sync.WaitGroup, times int) {
+func readMulti(chan1 <-chan SauceMessage, chan2 <-chan string, chan3 <-chan int, kill <-chan bool) {
+	for {
+		select{
+		case m1 := <- chan1:
+			fmt.Println("Got sauce",m1.Sender,"/",m1.Value)
+		case m2:= <- chan2:
+			fmt.Println("Got string", m2)
+		case m3 := <-chan3:
+			fmt.Println("Got int", m3)
+		case <- kill: // explicit kill signal
+			return
+		case <-time.After(time.Millisecond*100):
+			fmt.Println("nowt t/o")
+		}
+	}
+}
+
+func writeChan2(name string, source chan<- SauceMessage, wait *sync.WaitGroup) { // write only channel
 	defer wait.Done()
+	for i := 0; i < 10; i++ {
+		source <- SauceMessage{
+			Sender: name,
+			Value:  i,
+		}
+		fmt.Printf("%s->%d ", name, i)
+		time.Sleep(time.Duration(int(time.Millisecond)*i))
+	}
+}
+
+func readRangeChan2(name string, source <-chan SauceMessage) {
+	for v := range source{
+		fmt.Printf("%s (%d,%s) ", name, v.Value, v.Sender)
+		time.Sleep(time.Millisecond * 10)
+	}
+	fmt.Printf("%s c. ", name)
+}
+
+func s(i int) string {return strconv.Itoa(i) }
+
+func writeChan(name string, source chan<- SauceMessage) { // write only channel
+	for i := 0; i < 3; i++ {
+		source <- SauceMessage{
+			Sender: name,
+			Value:  i,
+		}
+		time.Sleep(time.Millisecond*10)
+	}
+}
+
+func readChan(name string, source <-chan int) { // read only channel
+	for {
+		if v, ok := <-source; !ok {
+			fmt.Printf("%s closed\r\n", name)
+			return
+		} else {
+			fmt.Printf("%s (i) got %d; ", name, v)
+			time.Sleep(time.Millisecond * 10)
+		}
+	}
+}
+
+func readRangeChan(name string, source <-chan int) { // read only channel
+	for v := range source{
+		fmt.Printf("%s (r) got %d; ", name, v)
+		time.Sleep(time.Millisecond * 10)
+	}
+	fmt.Printf("%s closed\r\n", name)
+}
+
+func PingPonger(name string, inbox <-chan int, outbox chan<- int, wait *sync.WaitGroup, times int) {
+	defer wait.Done()
+	timeout := time.Millisecond*100
 
 	for i := 0; i < times; i++ {
-		v, ok := WithTimeout(func() interface{} { return <-inbox }, time.Second)
+		v, ok := WithTimeout(func() interface{} { return <-inbox }, timeout)
 
 		j := v.(int) + 1
 
@@ -99,7 +237,7 @@ func PingPonger(name string, inbox chan int, outbox chan int, wait *sync.WaitGro
 
 		fmt.Printf(" %s ret %d ", name, j)
 
-		_, ok = WithTimeout(func() interface{} { outbox <- j; return nil }, time.Second)
+		_, ok = WithTimeout(func() interface{} { outbox <- j; return nil }, timeout)
 		if !ok {
 			fmt.Printf("... %s wins! (nr)\r\n", name)
 			return
@@ -107,28 +245,15 @@ func PingPonger(name string, inbox chan int, outbox chan int, wait *sync.WaitGro
 	}
 }
 
-func WithTimeout(delegate func()interface{}, timeout time.Duration) (result interface{}, ok bool) {
-	ch := make(chan bool, 1) // buffered
-	var ret interface{}
-	go func() {
-		feedback := make(chan bool) // unbuffered
-
-		// fire delegate on non-waited goroutinue, send 'ok' down the unbuffered channel if it returns
-		go func() {
-			ret = delegate()
-			feedback <- true
-		}()
-
-		select { // handle the first of: 1. delegate completes; 2. timeout expires
-		case _ = <-feedback: // trigger if got a value
-			ch <- true // release the outer wait with success
-		case <-time.After(timeout): // trigger if time-out
-			ch <- false // release the outer wait with failure
-		}
-	}()
-
-	ok = <- ch // wait for either return of delegate or timeout
-	return ret, ok
+func WithTimeout(delegate func() interface{}, timeout time.Duration) (ret interface{}, ok bool) {
+	ch := make(chan interface{}, 1) // buffered
+	go func() { ch <- delegate() }()
+	select {
+	case ret = <-ch:
+		return ret, true
+	case <-time.After(timeout):
+	}
+	return nil, false
 }
 
 func pauseAndSend(waitChan chan int) {
