@@ -8,12 +8,13 @@ import (
 
 func TestParallelExecutionOnAccount(t *testing.T){
 	// new account
-	expected :=10_000.01
-	myAccount := NewAccount(10_000.01)
+	initial   := 10_000.01
+	myAccount := NewAccount(initial)
+	expected  := 10_500.01
 
 	wait := &sync.WaitGroup{}
 	doLotsOfDeposits(myAccount, wait)
-	doLotsOfWithdrawls(myAccount, wait)
+	doLotsOfWithdrawals(myAccount, wait)
 	wait.Wait()
 
 	final := myAccount.GetBalance()
@@ -27,18 +28,18 @@ func doLotsOfDeposits(account *Account, wait *sync.WaitGroup) {
 	go func() {
 		for i := 0; i < 1000; i++ {
 			account.Deposit(1)
-			time.Sleep(time.Millisecond)
+			time.Sleep(1)
 		}
 		wait.Done()
 	}()
 }
 
-func doLotsOfWithdrawls(account *Account, wait *sync.WaitGroup) {
+func doLotsOfWithdrawals(account *Account, wait *sync.WaitGroup) {
 	wait.Add(1)
 	go func() {
-		for i := 0; i < 1000; i++ {
+		for i := 0; i < 500; i++ {
 			account.Withdraw(1)
-			time.Sleep(time.Millisecond)
+			time.Sleep(1)
 		}
 		wait.Done()
 	}()
