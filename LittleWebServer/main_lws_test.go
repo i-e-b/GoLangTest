@@ -1,14 +1,23 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
+func TestScanning(t *testing.T){
+
+	bits := strings.Split("/x/y/z", "/")[1:]
+
+	fmt.Printf("Got back %v\r\n", bits)
+}
+
 func TestLittleServer_ServeHTTP(t *testing.T) {
 	t.Run("Do a get", func(t *testing.T) {
-		request, _ := http.NewRequest(http.MethodGet, "/api/people/123", nil)
+		request, _ := http.NewRequest(http.MethodGet, "http://localhost:6080/api/people/123", nil)
 		response := httptest.NewRecorder() // built-in mocks! :-)
 
 		server := &LittleServer{}

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 )
 
 const(
@@ -18,13 +20,15 @@ type MyInputType struct {
 }
 
 type LittleServer struct {
-
+	userDb map[int]MyInputType
 }
 
 func main(){
 	fmt.Printf("Bringing up a server on http://localhost%s\r\n", httpPort)
 
-	server := &LittleServer{}
+	server := &LittleServer{
+		userDb: map[int]MyInputType{},
+	}
 	http.Handle("/", server)
 
 	err := http.ListenAndServe(httpPort, nil)
@@ -38,31 +42,127 @@ func (serv *LittleServer)ServeHTTP(response http.ResponseWriter, request *http.R
 	// `panic()` is restricted to the current request
 
 	fmt.Printf("REQ/%s %s %s [%v]\r\n",request.Method, request.Host, request.RequestURI, request.Header)
-	if request.Method == "POST" {
-		http.MaxBytesReader(response, request.Body, 0xFFFF)
-		decoder := json.NewDecoder(request.Body)
-		decoder.DisallowUnknownFields() // strict mode
-		expectedStruct := MyInputType{}
-		if err := decoder.Decode(&expectedStruct); err != nil {
-			fmt.Printf("    Bad struct: %v\r\n", err)
-			invalidInput(response)
-			return
-		} else {
-			fmt.Printf("    Read struct: %v\r\n", expectedStruct)
-		}
+
+	// URL property has query parser built in
+	//request.URL.Query().Get("query-key") // => "query-value", given https://.../my/path?query-key=query-value
+
+	pathBits := strings.Split(request.URL.Path, "/")
+	for len(pathBits) > 0 && pathBits[0] == "" { // trim empty sections
+		pathBits = pathBits[1:]
 	}
 
-	switch request.RequestURI {
-	case "/panic":
-		panic("Aaaaa!")
-	case "/picnic":
+	switch request.Method {
+	case http.MethodGet:
+		getHandler(serv, response, pathBits)
+	case http.MethodPost:
+		postHandler(serv, response, request, pathBits)
+	default:
+		unsupportedMethod(response)
+	}
+}
+
+func postHandler(serv *LittleServer, response http.ResponseWriter, request *http.Request, pathBits []string) {
+	if len(pathBits) < 1{
+		invalidInput(response)
+		return
+	}
+
+	switch pathBits[0] {
+	case "user":
+		postUser(serv, pathBits[1:], response, request)
+
+	default:
+		notFound(response)
+	}
+}
+
+func getHandler(serv *LittleServer, response http.ResponseWriter, pathBits []string) {
+	if len(pathBits) < 1{
+		homePage(response)
+		return
+	}
+
+	switch pathBits[0] {
+	case "user":
+		getUser(serv, pathBits[1:], response)
+
+	case "panic":
+		panic("panic!")
+	case "picnic":
 		picnic(response)
-	case "/favicon.ico":
+	case "favicon.ico":
 		sendIcon(response)
 
 	default:
 		notFound(response)
 	}
+}
+
+func postUser(serv *LittleServer, path []string, response http.ResponseWriter, request *http.Request) {
+	if len(path) != 1 {invalidInput(response); return}
+	id,err := strconv.Atoi(path[0])
+	if err != nil {invalidInput(response); return}
+
+	if request.Method == "POST" {
+		http.MaxBytesReader(response, request.Body, 0xFFFF)
+		decoder := json.NewDecoder(request.Body)
+		decoder.DisallowUnknownFields() // strict mode
+		incomingUser := MyInputType{}
+		if err = decoder.Decode(&incomingUser); err != nil {
+			fmt.Printf("    Bad struct: %v\r\n", err)
+			invalidInput(response)
+			return
+		} else {
+			fmt.Printf("    Read struct: %v\r\n", incomingUser)
+			serv.userDb[id] = incomingUser
+		}
+	}
+}
+
+func getUser(serv *LittleServer, path []string, response http.ResponseWriter) {
+	if len(path) < 1 {
+		listAllUsers(serv, response)
+		return
+	}
+
+	// parse next part as int, return it
+	if id,err:=strconv.Atoi(path[0]); err != nil{
+		invalidInput(response)
+		return
+	}else{
+		if data, err2 := json.Marshal(serv.userDb[id]); err2 != nil{
+			panic(err2)
+		} else {
+			pWrite(data, response)
+		}
+	}
+}
+
+func listAllUsers(serv *LittleServer, response http.ResponseWriter) {
+	response.Header().Set("Content-Type", "application/json")
+	response.WriteHeader(http.StatusOK)
+
+	data, err := json.Marshal(serv.userDb)
+	if err != nil {panic(err)}
+	pWrite(data, response)
+}
+
+func pWrite(msg []byte, response http.ResponseWriter){
+	if _, err := response.Write(msg); err != nil {panic(err)}
+}
+
+func unsupportedMethod(response http.ResponseWriter) {
+	response.Header().Set("Content-Type", "application/json")
+	response.WriteHeader(http.StatusMethodNotAllowed)
+	_, err := response.Write([]byte(`{"error":"http method not supported"}`))
+	if err != nil {panic(err)}
+}
+
+func homePage(response http.ResponseWriter) {
+	response.Header().Set("Content-Type", "application/json")
+	response.WriteHeader(http.StatusOK)
+	_, err := response.Write([]byte(`{"message":"hello world"}`))
+	if err != nil {panic(err)}
 }
 
 func picnic(response http.ResponseWriter) {
@@ -86,11 +186,9 @@ func invalidInput(response http.ResponseWriter) {
 	if err != nil {panic(err)}
 }
 
-
 func sendIcon(response http.ResponseWriter) {
 	response.Header().Set("Content-Type", "image/svg+xml")
 	response.WriteHeader(http.StatusOK)
-	_, err := response.Write([]byte(`<?xml version="1.0" standalone="no"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 150" height="64" width="64"><path d="m0 35.5l6.5-13 9.5 14.5 7-13 11.8 19.7 7.7-13.7 7.8 17 9.4-19.3 9.3 19.3 16-29.3 13.3 21.3 14.7-29.3 14.7 32.6 8.6-18.6 10.7 20.6 11.3-24 12 20 7.4-14.6 12 17.3 10-22 8 14 11.3-24 14 26 7.3-13.3 10.7 19.3 12-24.7 9.7 15 10.3-23.3 12 22.3 6.3-9.3 10.4 14 12-29.3 15.6 31.3 7-13.3 10 16.6 13.4-27.3 6.6 10.7 7.7-16.7 9 19.3 7.3-9.3 11.4 19.3 9.3-17.3 13.3 22 10.7-18 8 11.3 11.3-18 11.9 22 3.8-6.8v181.5h-480v-179.5z" fill="#175720"/></svg>`))
+	_, err := response.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><svg width="210mm" height="297mm" version="1.1" viewBox="0 0 210 297" xmlns="http://www.w3.org/2000/svg"><circle cx="26" cy="24" r="18" fill="#5b86bf"/></svg>`))
 	if err != nil {panic(err)}
 }
