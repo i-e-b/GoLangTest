@@ -19,8 +19,19 @@ const(
 
 //<editor-fold desc="Boiler plate">
 
-var loginDetails = map[string]string{
-	"ieb":"correct",
+var loginDetails = map[string]uint{
+	"ieb": hashStr("correct"),
+}
+
+func hashStr(s string) uint {
+	// NEVER ever use such a small and simple hash for passwords in a real system!
+	var mod uint = 65521
+	var a, b uint = 1, 0
+	for _, c := range s {
+		a = (a + uint(c)) % mod
+		b = (b + a) % mod
+	}
+	return (b << 16) | a
 }
 
 type Credentials struct {
@@ -158,7 +169,7 @@ func getHandler(serv *LittleServer, response http.ResponseWriter, request *http.
 
 	switch pathBits[0] {
 	case "user":
-		//if !isAuthenticated(request, response) {return}
+		if !isAuthenticated(request, response) {return}
 		getUser(serv, pathBits[1:], response)
 
 	case "panic":
@@ -191,7 +202,7 @@ func handleLogin(serv *LittleServer, response http.ResponseWriter, request *http
 	if knownPassword, ok := loginDetails[suppliedCreds.Username]; !ok {
 		invalidInput(response)
 		return
-	} else if knownPassword != suppliedCreds.Password {
+	} else if knownPassword != hashStr(suppliedCreds.Password) {
 		invalidInput(response)
 		return
 	}
