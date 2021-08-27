@@ -17,6 +17,7 @@ func TestScanning(t *testing.T){
 
 func TestLittleServer_ServeHTTP(t *testing.T) {
 	t.Run("Do a get", func(t *testing.T) {
+		SetUpLogging(false, false)
 		request, _ := http.NewRequest(http.MethodGet, "http://localhost:6080/api/people/123", nil)
 		response := httptest.NewRecorder() // built-in mocks! :-)
 

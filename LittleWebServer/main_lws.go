@@ -3,18 +3,37 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/golang-jwt/jwt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const(
 	httpPort = ":6080"
 )
 
+//<editor-fold desc="Boiler plate">
+
+var loginDetails = map[string]string{
+	"ieb":"correct",
+}
+
+type Credentials struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type Claims struct {
+	Username string `json:"un"`
+	jwt.StandardClaims
+}
+
+var jwtKey = []byte("Only suitable for development")
 
 type MyInputType struct {
 	ID int `json:"id"`
@@ -23,7 +42,8 @@ type MyInputType struct {
 }
 
 type LittleServer struct {
-	userDb  map[int]MyInputType
+	userDb     map[int]MyInputType
+	lastSignIn time.Time
 }
 
 var infoLog *log.Logger
@@ -31,7 +51,7 @@ var warnLog *log.Logger
 var critLog *log.Logger
 
 func main(){
-	logFile := setUpLogging(false, false)
+	logFile := SetUpLogging(false, false)
 	defer func(file *os.File) { if file == nil {return}; _ = file.Close() }(logFile)
 
 	infoLog.Printf("Bringing up a server on http://localhost%s\r\n", httpPort)
@@ -48,13 +68,16 @@ func main(){
 
 	http.Handle("/", server)
 
+	// just to test the JWT import is ok
+	infoLog.Printf("JWT time: %v",jwt.TimeFunc())
+
 	err := http.ListenAndServe(httpPort, nil)
 	if err != nil {
 		critLog.Fatalf("Server failed: %v", err)
 	}
 }
 
-func setUpLogging(useLogFile, onlyImportant bool) (usingFile *os.File) {
+func SetUpLogging(useLogFile, onlyImportant bool) (usingFile *os.File) {
 	logTarget := os.Stderr
 	if useLogFile {
 		file, err := os.OpenFile("app.log", os.O_CREATE|os.O_APPEND, 0644)
@@ -71,8 +94,8 @@ func setUpLogging(useLogFile, onlyImportant bool) (usingFile *os.File) {
 		log.SetOutput(file)
 	}
 
-	infoLog = log.New(logTarget, "INFO: ", log.Ldate|log.Ltime)
-	warnLog = log.New(logTarget, "WARN: ", log.Ldate|log.Ltime)
+	infoLog = log.New(logTarget, "INFO:  ", log.Ldate|log.Ltime)
+	warnLog = log.New(logTarget, "WARN:  ", log.Ldate|log.Ltime)
 	critLog = log.New(logTarget, "ERROR: ", log.Ldate|log.Ltime|log.Lshortfile)
 
 	if onlyImportant {
@@ -85,7 +108,7 @@ func setUpLogging(useLogFile, onlyImportant bool) (usingFile *os.File) {
 func (serv *LittleServer)ServeHTTP(response http.ResponseWriter, request *http.Request){
 	// should never modify `request`
 	// `panic()` is restricted to the current request
-	infoLog.Printf("REQ/%s %s %s [%v]\r\n", request.Method, request.Host, request.RequestURI, request.Header)
+	infoLog.Printf("REQ/%s %s %s [%v]\r\n", request.Method, request.Host, request.URL.Path, request.Header)
 
 	// URL property has query parser built in
 	//request.URL.Query().Get("query-key") // => "query-value", given https://.../my/path?query-key=query-value
@@ -98,13 +121,15 @@ func (serv *LittleServer)ServeHTTP(response http.ResponseWriter, request *http.R
 
 	switch request.Method {
 	case http.MethodGet:
-		getHandler(serv, response, pathBits)
+		getHandler(serv, response, request, pathBits)
 	case http.MethodPost:
 		postHandler(serv, response, request, pathBits)
 	default:
 		unsupportedMethod(request.Method, response)
 	}
 }
+
+//</editor-fold>
 
 func postHandler(serv *LittleServer, response http.ResponseWriter, request *http.Request, pathBits []string) {
 	if len(pathBits) < 1{
@@ -114,14 +139,18 @@ func postHandler(serv *LittleServer, response http.ResponseWriter, request *http
 
 	switch pathBits[0] {
 	case "user":
+		if !isAuthenticated(request, response) {return}
 		postUser(serv, pathBits[1:], response, request)
+
+	case "login":
+		handleLogin(serv, response, request)
 
 	default:
 		notFound(response)
 	}
 }
 
-func getHandler(serv *LittleServer, response http.ResponseWriter, pathBits []string) {
+func getHandler(serv *LittleServer, response http.ResponseWriter, request *http.Request, pathBits []string) {
 	if len(pathBits) < 1{
 		homePage(response)
 		return
@@ -129,6 +158,7 @@ func getHandler(serv *LittleServer, response http.ResponseWriter, pathBits []str
 
 	switch pathBits[0] {
 	case "user":
+		//if !isAuthenticated(request, response) {return}
 		getUser(serv, pathBits[1:], response)
 
 	case "panic":
@@ -143,25 +173,113 @@ func getHandler(serv *LittleServer, response http.ResponseWriter, pathBits []str
 	}
 }
 
+func handleLogin(serv *LittleServer, response http.ResponseWriter, request *http.Request) {
+
+	http.MaxBytesReader(response, request.Body, 0xFFFF)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields() // strict mode
+	suppliedCreds := Credentials{}
+
+	// Read input
+	if err := decoder.Decode(&suppliedCreds); err != nil {
+		warnLog.Printf("    Bad login struct: %v\r\n", err)
+		invalidInput(response)
+		return
+	}
+
+	// check password (very badly)
+	if knownPassword, ok := loginDetails[suppliedCreds.Username]; !ok {
+		invalidInput(response)
+		return
+	} else if knownPassword != suppliedCreds.Password {
+		invalidInput(response)
+		return
+	}
+
+	// Log-in is correct, build and return a token
+	expiration := time.Now().Add(5 * time.Minute)
+	claims := &Claims{
+		Username: suppliedCreds.Username,
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: expiration.Unix(),
+			Issuer:    "LittleWebServer",
+			Subject:   suppliedCreds.Username,
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS512, claims)
+	tokenStr, err := token.SignedString(jwtKey)
+	if err != nil {
+		warnLog.Panicf("Could not create token: %v", err)
+		return
+	}
+
+	http.SetCookie(response, &http.Cookie{
+		Name:    "token",
+		Value:   tokenStr,
+		Expires: expiration,
+	})
+
+	response.Header().Set("Content-Type", "application/json")
+	response.WriteHeader(http.StatusOK)
+	pWrite([]byte(`{"message":"ok"}`), response)
+	serv.lastSignIn = time.Now()
+}
+
 func postUser(serv *LittleServer, path []string, response http.ResponseWriter, request *http.Request) {
 	if len(path) != 1 {invalidInput(response); return}
 	id,err := strconv.Atoi(path[0])
 	if err != nil {invalidInput(response); return}
 
-	if request.Method == "POST" {
-		http.MaxBytesReader(response, request.Body, 0xFFFF)
-		decoder := json.NewDecoder(request.Body)
-		decoder.DisallowUnknownFields() // strict mode
-		incomingUser := MyInputType{}
-		if err = decoder.Decode(&incomingUser); err != nil {
-			warnLog.Printf("    Bad struct: %v\r\n", err)
-			invalidInput(response)
-			return
-		} else {
+	http.MaxBytesReader(response, request.Body, 0xFFFF)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields() // strict mode
+	incomingUser := MyInputType{}
+	if err = decoder.Decode(&incomingUser); err != nil {
+												   warnLog.Printf("    Bad struct: %v\r\n", err)
+												   invalidInput(response)
+												   return
+												   } else {
 			infoLog.Printf("    Read struct: %v\r\n", incomingUser)
 			serv.userDb[id] = incomingUser
 		}
+}
+
+func isAuthenticated(request *http.Request, response http.ResponseWriter) bool {
+	tokenCookie,err := request.Cookie("token")
+	if err != nil{
+		if err == http.ErrNoCookie{
+			mustAuth(response)
+			return false
+		}
 	}
+
+	claims := &Claims{}
+	token,err := jwt.ParseWithClaims(tokenCookie.Value,
+		claims,
+		func(token *jwt.Token) (interface{}, error) {return jwtKey,nil },
+	)
+	if err != nil {
+		if err == jwt.ErrSignatureInvalid{
+			warnLog.Printf("JWT token does not match: %v", err)
+		}
+		infoLog.Printf("Failed to parse token: %v", err)
+		mustAuth(response)
+		return false
+	}
+	if !token.Valid {
+		infoLog.Printf("User presented a signed but invalid token")
+		mustAuth(response)
+		return false
+	}
+
+	return true
+}
+
+func mustAuth(response http.ResponseWriter) {
+	response.Header().Set("Content-Type", "application/json")
+	response.WriteHeader(http.StatusUnauthorized)
+	pWrite([]byte(`{"error":"must provide token cookie"}`), response)
+	infoLog.Printf("User supplied no auth token")
 }
 
 func getUser(serv *LittleServer, path []string, response http.ResponseWriter) {

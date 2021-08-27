@@ -24,7 +24,6 @@ type workerData struct {
 }
 
 func main() {
-/*
 	fmt.Println("Let's do things independently...")
 
 	var value string
@@ -205,11 +204,9 @@ func main() {
 	fmt.Println()
 	//</editor-fold>
 
-	*/
-
 	//<editor-fold desc="Fan-out then Fan-in">
 
-	wait := &sync.WaitGroup{}
+	//wait = &sync.WaitGroup{}
 	// ---------------------------
 	// Fan-out then Fan-in
 	// ---------------------------
