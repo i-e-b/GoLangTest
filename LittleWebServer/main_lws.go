@@ -53,8 +53,9 @@ type MyInputType struct {
 }
 
 type LittleServer struct {
-	userDb     map[int]MyInputType
-	lastSignIn time.Time
+	userDb          map[int]MyInputType
+	lastSignIn      time.Time
+	useDetailedLogs bool
 }
 
 var infoLog *log.Logger
@@ -62,14 +63,14 @@ var warnLog *log.Logger
 var critLog *log.Logger
 
 func main(){
-	logFile := SetUpLogging(false, false)
+	server := &LittleServer{
+		userDb: map[int]MyInputType{},
+	}
+	logFile := server.SetUpLogging(false, false)
 	defer func(file *os.File) { if file == nil {return}; _ = file.Close() }(logFile)
 
 	infoLog.Printf("Bringing up a server on http://localhost%s\r\n", httpPort)
 
-	server := &LittleServer{
-		userDb: map[int]MyInputType{},
-	}
 	// add a sample user at [0]
 	server.userDb[0] = MyInputType{
 		ID:   -1,
@@ -88,7 +89,7 @@ func main(){
 	}
 }
 
-func SetUpLogging(useLogFile, onlyImportant bool) (usingFile *os.File) {
+func (serv *LittleServer)SetUpLogging(useLogFile, onlyImportant bool) (usingFile *os.File) {
 	logTarget := os.Stderr
 	if useLogFile {
 		file, err := os.OpenFile("app.log", os.O_CREATE|os.O_APPEND, 0644)
@@ -113,13 +114,18 @@ func SetUpLogging(useLogFile, onlyImportant bool) (usingFile *os.File) {
 		infoLog.SetOutput(ioutil.Discard)
 	}
 
+	serv.useDetailedLogs = !onlyImportant
 	return
 }
 
 func (serv *LittleServer)ServeHTTP(response http.ResponseWriter, request *http.Request){
 	// should never modify `request`
 	// `panic()` is restricted to the current request
-	infoLog.Printf("REQ/%s %s %s [%v]\r\n", request.Method, request.Host, request.URL.Path, request.Header)
+	if serv.useDetailedLogs {
+		infoLog.Printf("REQ/%s %s %s [%v]\r\n", request.Method, request.Host, request.URL.Path, request.Header)
+	} else {
+		infoLog.Printf("REQ/%s %s %s \r\n", request.Method, request.Host, request.URL.Path)
+	}
 
 	// URL property has query parser built in
 	//request.URL.Query().Get("query-key") // => "query-value", given https://.../my/path?query-key=query-value
@@ -140,7 +146,16 @@ func (serv *LittleServer)ServeHTTP(response http.ResponseWriter, request *http.R
 	}
 }
 
+// pWrite writes to the response and panics on any error
+func pWrite(msg []byte, response http.ResponseWriter){
+	if _, err := response.Write(msg); err != nil {
+		warnLog.Panicf("Failed to write response: %v", err)
+	}
+}
+
 //</editor-fold>
+
+//<editor-fold desc="Routing & auth">
 
 func postHandler(serv *LittleServer, response http.ResponseWriter, request *http.Request, pathBits []string) {
 	if len(pathBits) < 1{
@@ -236,25 +251,12 @@ func handleLogin(serv *LittleServer, response http.ResponseWriter, request *http
 	serv.lastSignIn = time.Now()
 }
 
-func postUser(serv *LittleServer, path []string, response http.ResponseWriter, request *http.Request) {
-	if len(path) != 1 {invalidInput(response); return}
-	id,err := strconv.Atoi(path[0])
-	if err != nil {invalidInput(response); return}
-
-	http.MaxBytesReader(response, request.Body, 0xFFFF)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields() // strict mode
-	incomingUser := MyInputType{}
-	if err = decoder.Decode(&incomingUser); err != nil {
-												   warnLog.Printf("    Bad struct: %v\r\n", err)
-												   invalidInput(response)
-												   return
-												   } else {
-			infoLog.Printf("    Read struct: %v\r\n", incomingUser)
-			serv.userDb[id] = incomingUser
-		}
+func mustAuth(response http.ResponseWriter) {
+	response.Header().Set("Content-Type", "application/json")
+	response.WriteHeader(http.StatusUnauthorized)
+	pWrite([]byte(`{"error":"must provide token cookie"}`), response)
+	infoLog.Printf("User supplied no auth token")
 }
-
 func isAuthenticated(request *http.Request, response http.ResponseWriter) bool {
 	tokenCookie,err := request.Cookie("token")
 	if err != nil{
@@ -286,11 +288,26 @@ func isAuthenticated(request *http.Request, response http.ResponseWriter) bool {
 	return true
 }
 
-func mustAuth(response http.ResponseWriter) {
-	response.Header().Set("Content-Type", "application/json")
-	response.WriteHeader(http.StatusUnauthorized)
-	pWrite([]byte(`{"error":"must provide token cookie"}`), response)
-	infoLog.Printf("User supplied no auth token")
+//</editor-fold>
+
+//<editor-fold desc="Page actions">
+func postUser(serv *LittleServer, path []string, response http.ResponseWriter, request *http.Request) {
+	if len(path) != 1 {invalidInput(response); return}
+	id,err := strconv.Atoi(path[0])
+	if err != nil {invalidInput(response); return}
+
+	http.MaxBytesReader(response, request.Body, 0xFFFF)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields() // strict mode
+	incomingUser := MyInputType{}
+	if err = decoder.Decode(&incomingUser); err != nil {
+												   warnLog.Printf("    Bad struct: %v\r\n", err)
+												   invalidInput(response)
+												   return
+												   } else {
+			infoLog.Printf("    Read struct: %v\r\n", incomingUser)
+			serv.userDb[id] = incomingUser
+		}
 }
 
 func getUser(serv *LittleServer, path []string, response http.ResponseWriter) {
@@ -326,19 +343,6 @@ func listAllUsers(serv *LittleServer, response http.ResponseWriter) {
 	pWrite(data, response)
 }
 
-func pWrite(msg []byte, response http.ResponseWriter){
-	if _, err := response.Write(msg); err != nil {
-		warnLog.Panicf("Failed to write response: %v", err)
-	}
-}
-
-func unsupportedMethod(method string, response http.ResponseWriter) {
-	response.Header().Set("Content-Type", "application/json")
-	response.WriteHeader(http.StatusMethodNotAllowed)
-	pWrite([]byte(`{"error":"http method not supported"}`), response)
-	warnLog.Printf("Attempt to use %s which is not supported on this path", method)
-}
-
 func homePage(response http.ResponseWriter) {
 	response.Header().Set("Content-Type", "application/json")
 	response.WriteHeader(http.StatusOK)
@@ -349,6 +353,16 @@ func picnic(response http.ResponseWriter) {
 	response.Header().Set("Content-Type", "application/json")
 	response.WriteHeader(http.StatusOK)
 	pWrite([]byte(`{"message":"hello world", "lunch":"tasty"}`), response)
+}
+//</editor-fold>
+
+//<editor-fold desc="Canned responses">
+
+func unsupportedMethod(method string, response http.ResponseWriter) {
+	response.Header().Set("Content-Type", "application/json")
+	response.WriteHeader(http.StatusMethodNotAllowed)
+	pWrite([]byte(`{"error":"http method not supported"}`), response)
+	warnLog.Printf("Attempt to use %s which is not supported on this path", method)
 }
 
 func notFound(response http.ResponseWriter) {
@@ -371,3 +385,4 @@ func sendIcon(response http.ResponseWriter) {
 	_, err := response.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><svg version="1.1" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"><circle cx="24" cy="24" r="18" fill="#5b86bf"/></svg>`))
 	if err != nil {warnLog.Panicf("Failed to write favicon: %v",err)}
 }
+//</editor-fold>

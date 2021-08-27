@@ -16,8 +16,8 @@ func TestScanning(t *testing.T){
 }
 
 func TestPasswordProtection(t *testing.T){
-	SetUpLogging(false, false)
 	server :=  &LittleServer{userDb: map[int]MyInputType{}}
+	server.SetUpLogging(false, false)
 	server.userDb[0] = MyInputType{
 		ID:   123,
 		Name: "Test user",
@@ -65,15 +65,45 @@ func TestPasswordProtection(t *testing.T){
 	}
 }
 
-func startsWith(haystack, needle string)bool{return strings.Index(haystack, needle) == 0 }
+func TestInvalidHttpMethods(t *testing.T) {
+	server := &LittleServer{}
+	server.SetUpLogging(false, false)
+
+	expected := `{"error":"http method not supported"}`
+
+	notHandled := []string{
+		http.MethodConnect,
+		http.MethodDelete,
+		http.MethodPatch,
+		http.MethodPut,
+	}
+
+	for _, method := range notHandled {
+		t.Run(method, func(t *testing.T) {
+			request, _ := http.NewRequest(method, "http://localhost:6080/picnic", nil)
+			response := httptest.NewRecorder()
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusMethodNotAllowed {
+				t.Errorf("Expected %d, but got %d\r\n", http.StatusMethodNotAllowed, response.Code)
+			}
+
+			actual := response.Body.String()
+			if actual != expected {
+				t.Errorf("Expected\r\n    %v\r\nBut got\r\n    %v\r\n", expected, actual)
+			}
+		})
+	}
+}
 
 func TestLittleServer_ServeHTTP(t *testing.T) {
 	t.Run("Do a get", func(t *testing.T) {
-		SetUpLogging(false, false)
+		server := &LittleServer{}
+		server.SetUpLogging(false, false)
 		request, _ := http.NewRequest(http.MethodGet, "http://localhost:6080/api/people/123", nil)
 		response := httptest.NewRecorder() // built-in mocks! :-D
 
-		server := &LittleServer{}
 		server.ServeHTTP(response, request)
 
 		expected := `{"error":"page not found"}`
@@ -84,3 +114,18 @@ func TestLittleServer_ServeHTTP(t *testing.T) {
 		}
 	})
 }
+
+func BenchmarkCallingServer(b *testing.B) {
+	server := &LittleServer{}
+	server.SetUpLogging(true, true) // if you don't limit to important, you'll get many MiB of logs
+	request, _ := http.NewRequest(http.MethodGet, "http://localhost:6080/picnic", nil)
+	response := httptest.NewRecorder()
+
+	b.ResetTimer() // const stuff out of timed section. Not hugely necessary
+
+	for i := 0; i < b.N; i++ {
+		server.ServeHTTP(response, request)
+	}
+}
+
+func startsWith(haystack, needle string)bool{return strings.Index(haystack, needle) == 0 }

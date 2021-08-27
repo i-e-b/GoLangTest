@@ -36,14 +36,19 @@ var (
 	pRegisterClassExW = user32.NewProc("RegisterClassExW")
 	pTranslateMessage = user32.NewProc("TranslateMessage")
 
-	pBeginPaint       = user32.NewProc("BeginPaint")
-	pEndPaint         = user32.NewProc("EndPaint")
+	pBeginPaint = user32.NewProc("BeginPaint")
+	pEndPaint   = user32.NewProc("EndPaint")
 
-	pGetClientRect     = user32.NewProc("GetClientRect")
-	pGetDC = user32.NewProc("GetDC")
-	pCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
+	pGetClientRect          = user32.NewProc("GetClientRect")
+	pGetDC                  = user32.NewProc("GetDC")
+	pReleaseDC              = user32.NewProc("ReleaseDC")
+	pCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
 	pCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
-	pDeleteObject = gdi32.NewProc("DeleteObject")
+	pDeleteObject           = gdi32.NewProc("DeleteObject")
+	pGetDiBits              = gdi32.NewProc("GetDIBits")
+	pSetDiBits              = gdi32.NewProc("SetDIBits")
+	pBitBlt                 = gdi32.NewProc("BitBlt")
+	pSetDIBitsToDevice      = gdi32.NewProc("SetDIBitsToDevice")
 )
 
 const (
@@ -60,6 +65,9 @@ const (
 	cWS_VISIBLE      = 0x10000000
 
 	cWS_OVERLAPPEDWINDOW = 0x00CF0000
+
+	DIB_RGB_COLORS = 0
+	SRCCOPY        = 0x00CC0020
 )
 
 //func createWindow(className, windowName string, style uint32, x, y, width, height int32, parent, menu, instance syscall.Handle) (syscall.Handle, error) {
@@ -259,6 +267,42 @@ func deleteObject(obj uintptr){
 	_, _, _ = pDeleteObject.Call(obj)
 }
 
+func releaseDC(hwnd syscall.Handle, hdc uintptr){
+	_, _, _ = pReleaseDC.Call(uintptr(hwnd), hdc)
+}
+
+func getDiBits(hdc uintptr, hbmp uintptr, startScan uint32, cScanLines uint32, buffer *[]byte, bitInfo *tBITMAPINFO, colorMode uint32) uintptr {
+	r1, _, _ := pGetDiBits.Call(hdc, hbmp, uintptr(startScan), uintptr(cScanLines), uintptr(unsafe.Pointer(buffer)), uintptr(unsafe.Pointer(bitInfo)), uintptr(colorMode))
+	return r1
+}
+
+func setDiBits(hdc uintptr, hbmp uintptr, startScan uint32, cScanLines uint32, buffer *[]byte, bitInfo *tBITMAPINFO, colorMode uint32) uintptr {
+	r1, _, _ := pSetDiBits.Call(hdc, hbmp, uintptr(startScan), uintptr(cScanLines), uintptr(unsafe.Pointer(buffer)), uintptr(unsafe.Pointer(bitInfo)), uintptr(colorMode))
+	return r1
+}
+
+func bitBlt(hdc uintptr, x,y,cx,cy int32, hdcSrc uintptr, x1,y1 int32, rop int32){
+	_, _, _ = pBitBlt.Call(hdc, uintptr(x), uintptr(y), uintptr(cx), uintptr(cy), hdcSrc, uintptr(x1), uintptr(y1), uintptr(rop))
+}
+
+func setDIBitsToDevice(hdc uintptr,
+	xDest,yDest,
+	w,h,
+	xSrc, ySrc int32,
+	startScan uint32, cScanLines uint32,
+	buffer *byte,
+	bitInfo *tBITMAPINFO, colorMode uint32)uintptr{
+
+	r1, _, _ := pSetDIBitsToDevice.Call(hdc,
+		uintptr(xDest), uintptr(yDest),
+		uintptr(w), uintptr(h),
+		uintptr(xSrc), uintptr(ySrc),
+		uintptr(startScan), uintptr(cScanLines),
+		uintptr(unsafe.Pointer(buffer)),
+		uintptr(unsafe.Pointer(bitInfo)), uintptr(colorMode))
+	return r1
+}
+
 func main() {
 	className := "testClass"
 
@@ -364,10 +408,7 @@ func DrawBitsIntoWindow(hwnd syscall.Handle) {
 	}
 
 	hdc := getDC(hwnd)
-	//hCaptureDC := createCompatibleDC(hdc)
-	hBitmap := createCompatibleBitmap(hdc, width, height)
-	defer deleteObject(hBitmap)
-	//fmt.Println(hBitmap, hCaptureDC)
+	defer releaseDC(hwnd, hdc)
 
 	myBMInfo := tBITMAPINFO{}
 	myBMInfo.bmiHeader = tBITMAPINFOHEADER{
@@ -376,9 +417,23 @@ func DrawBitsIntoWindow(hwnd syscall.Handle) {
 		biPlanes : 1,
 		biBitCount : 32,
 	}
-	myBMInfo.bmiHeader.biSize = int32(unsafe.Sizeof(myBMInfo));
+	myBMInfo.bmiHeader.biSize = int32(unsafe.Sizeof(myBMInfo))
 
-	size := ((width * int32(myBMInfo.bmiHeader.biBitCount) + 31) / 32) * 4 * height
+	size := width * 4 * height // 32 bit argb
 	rawbytes := make([]byte, size)//[size]byte
-	fmt.Println(len(rawbytes))
+
+	var i int32
+	for i = 0; i < size; i+=4 {
+		rawbytes[i+0] = 0x7f
+		rawbytes[i+1] = 0xff
+		rawbytes[i+2] = 0x0A
+		rawbytes[i+3] = 0xA0
+	}
+
+	// directly copy byte values to device
+	// This in *kinda* working, but not 100%. Probably needs some invalidation or such-like in the event loop
+	result := setDIBitsToDevice(hdc, 0,0, width, height, 0, 0, 0, uint32(height), &rawbytes[0], &myBMInfo, DIB_RGB_COLORS)
+	if int32(result) != height {
+		fmt.Println(len(rawbytes), result, "<-", height)
+	}
 }
