@@ -330,9 +330,12 @@ func main() {
 		case cWM_PAINT:
 			paint:=tPAINTSTRUCT{}
 			beginPaint(hwnd, &paint)
-			defer endPaint(hwnd, &paint)
 
 			DrawBitsIntoWindow(hwnd)
+
+			endPaint(hwnd, &paint)
+			//ret := defWindowProc(hwnd, msg, wparam, lparam)
+			return 0//ret
 
 			//fmt.Printf("drawing %v (%v)\r\n", hwnd, paint.hdc)
 			// TODO: figure out drawing a raw bitmap here
@@ -395,6 +398,7 @@ func main() {
 	}
 }
 
+var fc byte = 0
 func DrawBitsIntoWindow(hwnd syscall.Handle) {
 	// https://stackoverflow.com/questions/35762636/raw-direct-acess-on-pixels-data-in-a-bitmapinfo-hbitmap
 	rc:= tRECT{}
@@ -410,29 +414,38 @@ func DrawBitsIntoWindow(hwnd syscall.Handle) {
 	hdc := getDC(hwnd)
 	defer releaseDC(hwnd, hdc)
 
+	size := uint64(width) * 4 * uint64(height) // 32 bit argb
+	rawbytes := make([]byte, size)//[size]byte
+
+	var i uint64
+	for i = 0; i < size; i+=4 {
+		rawbytes[i+0] = 0x7f
+		rawbytes[i+1] = 0xff
+		rawbytes[i+2] = fc
+		rawbytes[i+3] = 0
+		fc++
+	}
+
+	// directly copy byte values to device
+	// This in *kinda* working, but not 100%. Probably needs some invalidation or such-like in the event loop
+
+	safeW := width
+	safeH := height
+	if width > 500 {safeW = 500}
+	if height > 500 {safeH = 500}
+
 	myBMInfo := tBITMAPINFO{}
 	myBMInfo.bmiHeader = tBITMAPINFOHEADER{
-		biWidth : width,
-		biHeight : height,
+		biWidth : safeW,
+		biHeight : safeH,
 		biPlanes : 1,
 		biBitCount : 32,
 	}
 	myBMInfo.bmiHeader.biSize = int32(unsafe.Sizeof(myBMInfo))
 
-	size := width * 4 * height // 32 bit argb
-	rawbytes := make([]byte, size)//[size]byte
-
-	var i int32
-	for i = 0; i < size; i+=4 {
-		rawbytes[i+0] = 0x7f
-		rawbytes[i+1] = 0xff
-		rawbytes[i+2] = 0x0A
-		rawbytes[i+3] = 0xA0
-	}
-
-	// directly copy byte values to device
-	// This in *kinda* working, but not 100%. Probably needs some invalidation or such-like in the event loop
-	result := setDIBitsToDevice(hdc, 0,0, width, height, 0, 0, 0, uint32(height), &rawbytes[0], &myBMInfo, DIB_RGB_COLORS)
+	// SetDIBitsToDevice is limited in how big a region it can copy.
+	// Might need to do in 512x512 max chunks
+	result := setDIBitsToDevice(hdc, 10,10, safeW, safeH, 0, 0, 0, uint32(safeH), &rawbytes[0], &myBMInfo, DIB_RGB_COLORS)
 	if int32(result) != height {
 		fmt.Println(len(rawbytes), result, "<-", height)
 	}
