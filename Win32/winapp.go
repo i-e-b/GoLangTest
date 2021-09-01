@@ -23,7 +23,6 @@ func getModuleHandle() (syscall.Handle, error) {
 
 var (
 	user32 = syscall.NewLazyDLL("user32.dll")
-	//coredll = syscall.NewLazyDLL("coredll.dll") // if someone points you to this, it probably means user32 on desktop.
 	gdi32 = syscall.NewLazyDLL("gdi32.dll")
 
 	pCreateWindowExW  = user32.NewProc("CreateWindowExW")
@@ -36,18 +35,13 @@ var (
 	pRegisterClassExW = user32.NewProc("RegisterClassExW")
 	pTranslateMessage = user32.NewProc("TranslateMessage")
 
-	pBeginPaint = user32.NewProc("BeginPaint")
-	pEndPaint   = user32.NewProc("EndPaint")
+	pBeginPaint     = user32.NewProc("BeginPaint")
+	pEndPaint       = user32.NewProc("EndPaint")
+	pInvalidateRect = user32.NewProc("InvalidateRect")
 
 	pGetClientRect          = user32.NewProc("GetClientRect")
 	pGetDC                  = user32.NewProc("GetDC")
 	pReleaseDC              = user32.NewProc("ReleaseDC")
-	pCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
-	pCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
-	pDeleteObject           = gdi32.NewProc("DeleteObject")
-	pGetDiBits              = gdi32.NewProc("GetDIBits")
-	pSetDiBits              = gdi32.NewProc("SetDIBits")
-	pBitBlt                 = gdi32.NewProc("BitBlt")
 	pSetDIBitsToDevice      = gdi32.NewProc("SetDIBitsToDevice")
 )
 
@@ -70,7 +64,6 @@ const (
 	SRCCOPY        = 0x00CC0020
 )
 
-//func createWindow(className, windowName string, style uint32, x, y, width, height int32, parent, menu, instance syscall.Handle) (syscall.Handle, error) {
 func createWindow(className, windowName string, style uint32, x, y, width, height uint32, parent, menu, instance syscall.Handle) (syscall.Handle, error) {
 	classNamePtr, _ :=syscall.UTF16PtrFromString(className)
 	windowNamePtr, _ :=syscall.UTF16PtrFromString(windowName)
@@ -97,9 +90,10 @@ func createWindow(className, windowName string, style uint32, x, y, width, heigh
 
 const (
 	// Handy reference: https://www.pinvoke.net/default.aspx/Constants.WM
-	cWM_DESTROY = 0x0002
-	cWM_CLOSE   = 0x0010
-	cWM_PAINT	= 0x000F
+	cWM_DESTROY    = 0x0002
+	cWM_CLOSE      = 0x0010
+	cWM_PAINT      = 0x000F
+	cWM_ERASEBKGND = 0x0014
 )
 
 func defWindowProc(hwnd syscall.Handle, msg uint32, wparam, lparam uintptr) uintptr {
@@ -243,6 +237,9 @@ func beginPaint(hwnd syscall.Handle, paintStruct *tPAINTSTRUCT){
 func endPaint(hwnd syscall.Handle, paintStruct *tPAINTSTRUCT){
 	_, _, _ = pEndPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(paintStruct)))
 }
+func invalidateRect(hwnd syscall.Handle){
+	_, _, _ = pInvalidateRect.Call(uintptr(hwnd), uintptr(0), uintptr(0))
+}
 
 func getClientRect(hwnd syscall.Handle, lpRect *tRECT){
 	_, _, _ = pGetClientRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(lpRect)))
@@ -253,36 +250,8 @@ func getDC(hwnd syscall.Handle) uintptr{
 	return r1
 }
 
-func createCompatibleDC(hdc uintptr) uintptr {
-	r1, _, _ := pCreateCompatibleDC.Call(hdc)
-	return r1
-}
-
-func createCompatibleBitmap(hdc uintptr, width int32, height int32) uintptr {
-	r1, _, _ := pCreateCompatibleBitmap.Call(hdc, uintptr(width), uintptr(height))
-	return r1
-}
-
-func deleteObject(obj uintptr){
-	_, _, _ = pDeleteObject.Call(obj)
-}
-
 func releaseDC(hwnd syscall.Handle, hdc uintptr){
 	_, _, _ = pReleaseDC.Call(uintptr(hwnd), hdc)
-}
-
-func getDiBits(hdc uintptr, hbmp uintptr, startScan uint32, cScanLines uint32, buffer *[]byte, bitInfo *tBITMAPINFO, colorMode uint32) uintptr {
-	r1, _, _ := pGetDiBits.Call(hdc, hbmp, uintptr(startScan), uintptr(cScanLines), uintptr(unsafe.Pointer(buffer)), uintptr(unsafe.Pointer(bitInfo)), uintptr(colorMode))
-	return r1
-}
-
-func setDiBits(hdc uintptr, hbmp uintptr, startScan uint32, cScanLines uint32, buffer *[]byte, bitInfo *tBITMAPINFO, colorMode uint32) uintptr {
-	r1, _, _ := pSetDiBits.Call(hdc, hbmp, uintptr(startScan), uintptr(cScanLines), uintptr(unsafe.Pointer(buffer)), uintptr(unsafe.Pointer(bitInfo)), uintptr(colorMode))
-	return r1
-}
-
-func bitBlt(hdc uintptr, x,y,cx,cy int32, hdcSrc uintptr, x1,y1 int32, rop int32){
-	_, _, _ = pBitBlt.Call(hdc, uintptr(x), uintptr(y), uintptr(cx), uintptr(cy), hdcSrc, uintptr(x1), uintptr(y1), uintptr(rop))
 }
 
 func setDIBitsToDevice(hdc uintptr,
@@ -304,6 +273,9 @@ func setDIBitsToDevice(hdc uintptr,
 }
 
 func main() {
+	SetupRender(800, 600)
+
+
 	className := "testClass"
 
 	instance, err := getModuleHandle()
@@ -318,37 +290,7 @@ func main() {
 		return
 	}
 
-	// --------------------------------------------
-	// MAIN WIN32 EVENT LOOP
-	// --------------------------------------------
-	fn := func(hwnd syscall.Handle, msg uint32, wparam, lparam uintptr) uintptr {
-		switch msg {
-		case cWM_CLOSE:
-			destroyWindow(hwnd)
-		case cWM_DESTROY:
-			postQuitMessage(0)
-		case cWM_PAINT:
-			paint:=tPAINTSTRUCT{}
-			beginPaint(hwnd, &paint)
-
-			DrawBitsIntoWindow(hwnd)
-
-			endPaint(hwnd, &paint)
-			//ret := defWindowProc(hwnd, msg, wparam, lparam)
-			return 0//ret
-
-			//fmt.Printf("drawing %v (%v)\r\n", hwnd, paint.hdc)
-			// TODO: figure out drawing a raw bitmap here
-			// see also https://www.codeproject.com/articles/224754/guide-to-win32-memory-dc
-			// HBITMAP memBM = CreateCompatibleBitmap ( hDC, nWidth, nHeight );  https://docs.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-createcompatiblebitmap
-			// int SetDIBits(hDC, memBM, ...); https://docs.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-setdibits
-			// BOOL DeleteObject(memBM); https://docs.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-deleteobject
-		default:
-			ret := defWindowProc(hwnd, msg, wparam, lparam)
-			return ret
-		}
-		return 0
-	}
+	fn :=WindowsMessageHandler
 
 	wcx := tWNDCLASSEXW{
 		wndProc:    syscall.NewCallback(fn),
@@ -370,8 +312,8 @@ func main() {
 		cWS_VISIBLE|cWS_OVERLAPPEDWINDOW,
 		cSW_USE_DEFAULT,
 		cSW_USE_DEFAULT,
-		cSW_USE_DEFAULT,
-		cSW_USE_DEFAULT,
+		800,//cSW_USE_DEFAULT,
+		600,//cSW_USE_DEFAULT,
 		0,
 		0,
 		instance,
@@ -398,9 +340,36 @@ func main() {
 	}
 }
 
-var fc byte = 0
+// WindowsMessageHandler is the ---------------
+//             MAIN WIN32 EVENT LOOP
+// --------------------------------------------
+func WindowsMessageHandler (hwnd syscall.Handle, msg uint32, wparam, lparam uintptr) uintptr {
+	switch msg {
+	case cWM_CLOSE:
+		destroyWindow(hwnd)
+	case cWM_DESTROY:
+		postQuitMessage(0)
+	case cWM_ERASEBKGND:
+		// do nothing, we will overdraw everything
+		return 1
+	case cWM_PAINT:
+		paint:=tPAINTSTRUCT{}
+		beginPaint(hwnd, &paint)
+
+		DrawBitsIntoWindow(hwnd)
+
+		endPaint(hwnd, &paint)
+
+		invalidateRect(hwnd) // keep invalidating the window to animate
+		return 0//ret
+	default:
+		ret := defWindowProc(hwnd, msg, wparam, lparam)
+		return ret
+	}
+	return 0
+}
+
 func DrawBitsIntoWindow(hwnd syscall.Handle) {
-	// https://stackoverflow.com/questions/35762636/raw-direct-acess-on-pixels-data-in-a-bitmapinfo-hbitmap
 	rc:= tRECT{}
 	getClientRect(hwnd, &rc)
 
@@ -414,39 +383,33 @@ func DrawBitsIntoWindow(hwnd syscall.Handle) {
 	hdc := getDC(hwnd)
 	defer releaseDC(hwnd, hdc)
 
-	size := uint64(width) * 4 * uint64(height) // 32 bit argb
-	rawbytes := make([]byte, size)//[size]byte
-
-	var i uint64
-	for i = 0; i < size; i+=4 {
-		rawbytes[i+0] = 0x7f
-		rawbytes[i+1] = 0xff
-		rawbytes[i+2] = fc
-		rawbytes[i+3] = 0
-		fc++
-	}
+	RenderFrame()
 
 	// directly copy byte values to device
 	// This in *kinda* working, but not 100%. Probably needs some invalidation or such-like in the event loop
 
-	safeW := width
-	safeH := height
-	if width > 500 {safeW = 500}
-	if height > 500 {safeH = 500}
+	bmpWidth := int32(renderWidth)
+	bmpHeight := int32(renderHeight)
+
+	minHeight := min(bmpHeight, height)
+	minWidth := min(bmpWidth, width)
 
 	myBMInfo := tBITMAPINFO{}
 	myBMInfo.bmiHeader = tBITMAPINFOHEADER{
-		biWidth : safeW,
-		biHeight : safeH,
-		biPlanes : 1,
+		biWidth :    bmpWidth,
+		biHeight :   bmpHeight,
+		biPlanes :   1,
 		biBitCount : 32,
 	}
 	myBMInfo.bmiHeader.biSize = int32(unsafe.Sizeof(myBMInfo))
 
-	// SetDIBitsToDevice is limited in how big a region it can copy.
+	// SetDIBitsToDevice seems to be limited in how big a region it can copy.
 	// Might need to do in 512x512 max chunks
-	result := setDIBitsToDevice(hdc, 10,10, safeW, safeH, 0, 0, 0, uint32(safeH), &rawbytes[0], &myBMInfo, DIB_RGB_COLORS)
-	if int32(result) != height {
-		fmt.Println(len(rawbytes), result, "<-", height)
-	}
+	setDIBitsToDevice(hdc, 0,0, minWidth, minHeight, 0, 0, 0, uint32(minHeight), GetBufferPointer(), &myBMInfo, DIB_RGB_COLORS)
+
+}
+
+func min(a,b int32) int32 {
+	if a < b {return a}
+	return b
 }
