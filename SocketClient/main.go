@@ -23,8 +23,8 @@ func main() {
 	fmt.Printf("Found: %v", ipAddr)
 
 
-	conn, erro := net.Dial("tcp", "127.0.0.1:9001")
-	if erro != nil { panic(erro) }
+	conn, err := net.Dial("tcp", "127.0.0.1:9001")
+	if err != nil { panic(err) }
 	defer func(conn net.Conn) {_ = conn.Close() }(conn)
 
 	// check for a welcome message
@@ -36,21 +36,29 @@ func main() {
 	}
 	_ = conn.SetDeadline(time.Time{})
 
+	clientLoop(conn)
+}
+
+func clientLoop(conn net.Conn) {
 	// read from stdin, and relay to the server
-	for{
+	for {
 		reader := bufio.NewReader(os.Stdin)
 		fmt.Print(":> ")
 		cmd, err := reader.ReadString('\n')
-		if err != nil {panic(err)}
+		if err != nil {
+			panic(err)
+		}
 
-		_, err = fmt.Fprintf(conn, cmd + "\n") // send to server
+		_, err = fmt.Fprintf(conn, cmd+"\n") // send to server
 		if err != nil {
 			fmt.Printf("Remote server disconnected. Ending. (%v)", err)
 			return
 		}
 
 		err = conn.SetReadDeadline(deadline(500 * time.Millisecond)) // if the server doesn't reply, don't wait forever
-		if err != nil {panic(err)}
+		if err != nil {
+			panic(err)
+		}
 
 		reply, err := bufio.NewReader(conn).ReadString('\n') // blocking read from server
 		if err != nil {

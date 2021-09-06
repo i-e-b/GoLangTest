@@ -50,6 +50,9 @@ func sessionLoop(conn net.Conn) {
 		}
 
 		switch {
+		case is(message, "ping"):
+			writeConsole(conn, "pong\r\n")
+
 		case is(message, "die"):
 			writeConsole(conn, "bye!\r\n")
 			return
