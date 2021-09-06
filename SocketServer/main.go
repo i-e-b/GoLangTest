@@ -65,6 +65,9 @@ func sessionLoop(conn net.Conn) {
 		case is(message, "go west"):
 			writeConsole(conn, "It is dark, you may be eaten by a grue.\r\n")
 
+		case is(message, "shh"):
+			// go quiet to test client timeout
+
 		default:
 			writeConsole(conn, "Sure, tell me more.\r\n")
 		}

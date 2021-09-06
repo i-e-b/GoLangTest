@@ -15,12 +15,20 @@ You should run the socket server before triggering this.
 */
 
 func main() {
+	// net.DNSError (?)
+	ipAddr, err := net.LookupAddr("google.com")
+	if err != nil {
+		fmt.Printf("Lookup failed: %v", ipAddr)
+	}
+	fmt.Printf("Found: %v", ipAddr)
+
+
 	conn, erro := net.Dial("tcp", "127.0.0.1:9001")
 	if erro != nil { panic(erro) }
 	defer func(conn net.Conn) {_ = conn.Close() }(conn)
 
 	// check for a welcome message
-	err := conn.SetReadDeadline(deadline(500 * time.Millisecond))
+	err = conn.SetReadDeadline(deadline(500 * time.Millisecond))
 	if err != nil {panic(err)}
 	reply, _ := bufio.NewReader(conn).ReadString('\n')
 	if reply != "" {
@@ -41,9 +49,16 @@ func main() {
 			return
 		}
 
+		err = conn.SetReadDeadline(deadline(500 * time.Millisecond)) // if the server doesn't reply, don't wait forever
+		if err != nil {panic(err)}
+
 		reply, err := bufio.NewReader(conn).ReadString('\n') // blocking read from server
 		if err != nil {
-			fmt.Printf("Remote server disconnected. Ending. (%v)", err)
+			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
+				fmt.Printf("Server was quiet (%v)", err)
+				continue
+			}
+			fmt.Printf("Remote server disconnected. Ending. (%v) / %T", err, err)
 			return
 		}
 
