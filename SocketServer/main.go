@@ -24,7 +24,7 @@ func main() {
 	defer func(conn net.Conn) { _ = conn.Close() }(conn)
 
 	clearConsole(conn)
-	writeConsole(conn, "Welcome to UselessNet. Type 'die' to end session.")
+	writeConsole(conn, "Welcome to UselessNet. Type 'die' to end session.\r\n")
 
 	sessionLoop(conn)
 }
